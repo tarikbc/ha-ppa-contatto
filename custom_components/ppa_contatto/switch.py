@@ -102,11 +102,14 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
             configuration_url="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw",
         )
 
+        # Initialize relay-specific attributes for all entities to avoid AttributeError
+        self._relay_duration: Optional[int] = None
+        self._momentary_active: bool = False
+        self._momentary_task: Optional[asyncio.Task] = None
+
         # Set entity description based on device type
         if self._device_type == DEVICE_TYPE_RELAY:
             self._attr_entity_registry_enabled_default = True
-            # Track relay duration for behavior (will be fetched on update)
-            self._relay_duration: Optional[int] = None
 
     @property
     def is_on(self) -> bool:
@@ -128,14 +131,16 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
             return device.get("status", {}).get("gate") == "open"
 
         elif self._device_type == DEVICE_TYPE_RELAY:
-            # Relays are momentary buttons - they're "on" very briefly when activated
-            # Most of the time they should show as "off"
-            # Check latest status first, then fall back to device status
-            latest_relay_status = latest_status.get("relay")
-            if latest_relay_status is not None:
-                return latest_relay_status == "on"
-            # Fallback to device status
-            return device.get("status", {}).get("relay") == "on"
+            # For relays, behavior depends on duration setting
+            if self._relay_duration == -1:
+                # Toggle switch mode - use actual relay state
+                latest_relay_status = latest_status.get("relay")
+                if latest_relay_status is not None:
+                    return latest_relay_status == "on"
+                return device.get("status", {}).get("relay") == "on"
+            else:
+                # Momentary button mode - show our momentary state
+                return self._momentary_active
 
         return False
 
@@ -176,26 +181,90 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
         try:
-            await self._api.control_device(self._serial, self._device_type)
-            _LOGGER.debug("Successfully activated %s %s", self._device_type, self._serial)
-
-            # Schedule a delayed refresh to allow device status to update
-            # Use asyncio.create_task to not block the response
-            if hasattr(self.coordinator, "async_request_refresh_with_delay"):
-                asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
+            # For momentary relays, implement button behavior
+            if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration != -1:
+                await self._activate_momentary_relay()
             else:
-                # Fallback to immediate refresh
-                await self.coordinator.async_request_refresh()
+                # Normal switch behavior for gates and toggle relays
+                await self._api.control_device(self._serial, self._device_type)
+                _LOGGER.debug("Successfully activated %s %s", self._device_type, self._serial)
+
+                # Schedule a delayed refresh to allow device status to update
+                if hasattr(self.coordinator, "async_request_refresh_with_delay"):
+                    asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
+                else:
+                    await self.coordinator.async_request_refresh()
 
         except Exception as err:
             _LOGGER.error("Failed to turn on %s %s: %s", self._device_type, self._serial, err)
             raise
 
+    async def _activate_momentary_relay(self) -> None:
+        """Activate relay in momentary button mode."""
+        # Cancel any existing momentary task
+        if self._momentary_task and not self._momentary_task.done():
+            self._momentary_task.cancel()
+
+        # Immediately show button as "on"
+        self._momentary_active = True
+        self.async_write_ha_state()
+
+        try:
+            # Send the activation request
+            await self._api.control_device(self._serial, self._device_type)
+            _LOGGER.debug("Successfully activated momentary relay %s", self._serial)
+
+            # Create task to reset button after duration
+            duration_seconds = (self._relay_duration or 1000) / 1000.0  # Convert ms to seconds
+            self._momentary_task = asyncio.create_task(self._reset_momentary_button(duration_seconds))
+
+        except Exception as err:
+            # If API call failed, immediately reset button
+            self._momentary_active = False
+            self.async_write_ha_state()
+            raise
+
+    async def _reset_momentary_button(self, duration_seconds: float) -> None:
+        """Reset momentary button after duration."""
+        try:
+            # Wait for the relay duration
+            await asyncio.sleep(duration_seconds)
+            
+            # Set button back to "off"
+            self._momentary_active = False
+            self.async_write_ha_state()
+            
+            # Pull fresh state from API to check actual relay status
+            await self.coordinator.async_request_refresh()
+            
+        except asyncio.CancelledError:
+            # Task was cancelled, still reset the button
+            self._momentary_active = False
+            self.async_write_ha_state()
+        except Exception as err:
+            _LOGGER.error("Error in momentary button reset for %s: %s", self._serial, err)
+            self._momentary_active = False
+            self.async_write_ha_state()
+
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
-        # For gates and relays, turning "off" is the same as turning "on"
-        # (it's a momentary action - like pressing a button)
-        await self.async_turn_on(**kwargs)
+        if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration == -1:
+            # Toggle relay in switch mode - turning "off" should actually turn it off
+            try:
+                await self._api.control_device(self._serial, self._device_type)
+                _LOGGER.debug("Successfully deactivated toggle relay %s", self._serial)
+                
+                if hasattr(self.coordinator, "async_request_refresh_with_delay"):
+                    asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
+                else:
+                    await self.coordinator.async_request_refresh()
+            except Exception as err:
+                _LOGGER.error("Failed to turn off %s %s: %s", self._device_type, self._serial, err)
+                raise
+        else:
+            # For gates and momentary relays, turning "off" is the same as turning "on"
+            # (it's a momentary action - like pressing a button)
+            await self.async_turn_on(**kwargs)
 
     async def _get_relay_duration(self) -> Optional[int]:
         """Get the current relay duration setting."""
@@ -261,3 +330,12 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
                 attrs["note"] = "Configure relay duration in device settings"
 
         return attrs
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when entity is removed."""
+        if self._momentary_task and not self._momentary_task.done():
+            self._momentary_task.cancel()
+            try:
+                await self._momentary_task
+            except asyncio.CancelledError:
+                pass

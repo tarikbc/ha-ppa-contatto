@@ -127,6 +127,46 @@ def commit_and_tag(version):
     print(f"✅ Created git tag v{version} and pushed to GitHub")
 
 
+def get_change_summary():
+    """Get recent changes using reportgen on the latest commit, with fallback."""
+    # Check if reportgen is available
+    try:
+        run_command("which reportgen")
+    except:
+        print("⚠️  reportgen not found, using default change description")
+        return "- Bug fixes and improvements\n- Updated integration components\n- Enhanced stability and performance"
+    
+    try:
+        # Get latest commit hash
+        commit_hash = run_command("git rev-parse HEAD")
+        
+        # Run reportgen on the latest commit
+        reportgen_output = run_command(f"reportgen {commit_hash}")
+        
+        # Extract the change summary section
+        lines = reportgen_output.split('\n')
+        summary_lines = []
+        in_summary = False
+        
+        for line in lines:
+            if line.strip() == "===== CHANGE SUMMARY =====":
+                in_summary = True
+                continue
+            elif line.strip().startswith("===== ") and in_summary:
+                break
+            elif in_summary and line.strip():
+                summary_lines.append(line.strip())
+        
+        if not summary_lines:
+            return "- Bug fixes and improvements\n- Updated integration components"
+        
+        return '\n'.join(f"- {line}" if not line.startswith('-') else line for line in summary_lines)
+    
+    except Exception as e:
+        print(f"⚠️  Could not generate change summary: {e}")
+        return "- Bug fixes and improvements\n- Updated integration components\n- Enhanced stability and performance"
+
+
 def create_github_release(version, zip_filename):
     """Create GitHub release with zip file."""
     # Check if gh CLI is authenticated
@@ -136,8 +176,14 @@ def create_github_release(version, zip_filename):
         print("❌ GitHub CLI not authenticated. Please run: gh auth login")
         sys.exit(1)
     
+    # Get recent changes
+    change_summary = get_change_summary()
+    
     # Create release notes
     release_notes = f"""Release v{version} - HACS Compatible Integration
+
+## Changes in this Release
+{change_summary}
 
 ## Features
 - HACS compatible integration for PPA Contatto
@@ -149,11 +195,20 @@ def create_github_release(version, zip_filename):
 Install via HACS or download the `{zip_filename}` file and extract to your `custom_components` folder.
 """
     
-    # Create release
-    cmd = f'gh release create v{version} {zip_filename} --title "v{version}" --notes "{release_notes}"'
-    run_command(cmd, capture_output=False)
+    # Create temporary file for release notes to avoid shell escaping issues
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        f.write(release_notes)
+        notes_file = f.name
     
-    print(f"✅ Created GitHub release v{version} with {zip_filename}")
+    try:
+        # Create release using notes file
+        cmd = f'gh release create v{version} {zip_filename} --title "v{version}" --notes-file "{notes_file}"'
+        run_command(cmd, capture_output=False)
+        
+        print(f"✅ Created GitHub release v{version} with {zip_filename}")
+    finally:
+        # Clean up temporary file
+        os.unlink(notes_file)
 
 
 def main():
