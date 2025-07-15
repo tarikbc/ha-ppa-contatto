@@ -185,6 +185,10 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
     @property
     def available(self) -> bool:
         """Return if entity is available."""
+        # Check if coordinator has valid data (API is responding)
+        if not self.coordinator.last_update_success:
+            return False
+
         device = self._get_device_data()
         if not device:
             return False
