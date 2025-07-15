@@ -14,4 +14,4 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the PPA Contatto text platform."""
-    await config_setup_entry(hass, config_entry, async_add_entities, "text") 
+    await config_setup_entry(hass, config_entry, async_add_entities, "text")

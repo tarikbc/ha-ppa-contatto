@@ -27,63 +27,55 @@ async def async_setup_entry(
     """Set up PPA Contatto configuration entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     api = hass.data[DOMAIN][config_entry.entry_id]["api"]
-    
+
     entities = []
-    
+
     # Create configuration entities for each device
     for device in coordinator.data.get("devices", []):
         serial = device.get("serial")
         if not serial:
             continue
-        
+
         if entity_type == "switch":
             # Configuration switches
-            entities.extend([
-                PPAContattoConfigSwitch(
-                    coordinator, api, device, f"{serial}_favorite", 
-                    "Favorite", "favorite"
-                ),
-                PPAContattoConfigSwitch(
-                    coordinator, api, device, f"{serial}_notifications", 
-                    "Notifications", "notification"
-                ),
-            ])
-            
+            entities.extend(
+                [
+                    PPAContattoConfigSwitch(coordinator, api, device, f"{serial}_favorite", "Favorite", "favorite"),
+                    PPAContattoConfigSwitch(
+                        coordinator, api, device, f"{serial}_notifications", "Notifications", "notification"
+                    ),
+                ]
+            )
+
             # Show/hide switches for gate and relay
             if device.get("name", {}).get("gate"):
                 entities.append(
                     PPAContattoVisibilitySwitch(
-                        coordinator, api, device, f"{serial}_gate_visible",
-                        "Gate Visible", DEVICE_TYPE_GATE
+                        coordinator, api, device, f"{serial}_gate_visible", "Gate Visible", DEVICE_TYPE_GATE
                     )
                 )
-            
+
             if device.get("name", {}).get("relay"):
                 entities.append(
                     PPAContattoVisibilitySwitch(
-                        coordinator, api, device, f"{serial}_relay_visible",
-                        "Relay Visible", DEVICE_TYPE_RELAY
+                        coordinator, api, device, f"{serial}_relay_visible", "Relay Visible", DEVICE_TYPE_RELAY
                     )
                 )
-                
+
         elif entity_type == "text":
             # Name configuration text entities
             if device.get("name", {}).get("gate"):
                 entities.append(
-                    PPAContattoNameText(
-                        coordinator, api, device, f"{serial}_gate_name",
-                        "Gate Name", DEVICE_TYPE_GATE
-                    )
+                    PPAContattoNameText(coordinator, api, device, f"{serial}_gate_name", "Gate Name", DEVICE_TYPE_GATE)
                 )
-            
+
             if device.get("name", {}).get("relay"):
                 entities.append(
                     PPAContattoNameText(
-                        coordinator, api, device, f"{serial}_relay_name",
-                        "Relay Name", DEVICE_TYPE_RELAY
+                        coordinator, api, device, f"{serial}_relay_name", "Relay Name", DEVICE_TYPE_RELAY
                     )
                 )
-    
+
     async_add_entities(entities)
 
 
@@ -106,7 +98,7 @@ class PPAContattoConfigBase(CoordinatorEntity):
         self._attr_name = name
         self._serial = device.get("serial")
         self._attr_entity_category = EntityCategory.CONFIG
-        
+
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
@@ -146,7 +138,7 @@ class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
         """Initialize the configuration switch."""
         super().__init__(coordinator, api, device, unique_id, name)
         self._setting_key = setting_key
-        
+
         # Set appropriate icons
         if setting_key == "favorite":
             self._attr_icon = "mdi:heart"
@@ -185,7 +177,7 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         device = self._get_device_data()
         if not device:
             return False
-        
+
         name_config = device.get("name", {}).get(self._device_type, {})
         return name_config.get("show", False)
 
@@ -194,17 +186,10 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         device = self._get_device_data()
         if not device:
             return
-            
+
         # Preserve current name while setting show=True
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {
-            "name": {
-                self._device_type: {
-                    "name": current_name,
-                    "show": True
-                }
-            }
-        }
+        update_data = {"name": {self._device_type: {"name": current_name, "show": True}}}
         await self._update_device_setting(update_data)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -212,17 +197,10 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         device = self._get_device_data()
         if not device:
             return
-            
+
         # Preserve current name while setting show=False
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {
-            "name": {
-                self._device_type: {
-                    "name": current_name,
-                    "show": False
-                }
-            }
-        }
+        update_data = {"name": {self._device_type: {"name": current_name, "show": False}}}
         await self._update_device_setting(update_data)
 
 
@@ -242,7 +220,7 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         device = self._get_device_data()
         if not device:
             return None
-        
+
         name_config = device.get("name", {}).get(self._device_type, {})
         return name_config.get("name", "")
 
@@ -251,15 +229,8 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         device = self._get_device_data()
         if not device:
             return
-            
+
         # Preserve current show setting while updating name
         current_show = device.get("name", {}).get(self._device_type, {}).get("show", True)
-        update_data = {
-            "name": {
-                self._device_type: {
-                    "name": value,
-                    "show": current_show
-                }
-            }
-        }
-        await self._update_device_setting(update_data) 
+        update_data = {"name": {self._device_type: {"name": value, "show": current_show}}}
+        await self._update_device_setting(update_data)

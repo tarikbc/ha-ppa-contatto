@@ -26,7 +26,7 @@ DEFAULT_HEADERS: Final = {
     "Accept": "*/*",
     "User-Agent": "Contatto/1 CFNetwork/3826.500.131 Darwin/24.5.0",
     "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
 }
 
 AUTH_HEADERS: Final = {
@@ -35,8 +35,8 @@ AUTH_HEADERS: Final = {
     "Accept": "*/*",
     "User-Agent": "Contatto/1 CFNetwork/3826.500.131 Darwin/24.5.0",
     "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
 }
 
 # Update intervals
-UPDATE_INTERVAL: Final = 30  # seconds 
+UPDATE_INTERVAL: Final = 30  # seconds

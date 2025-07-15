@@ -21,26 +21,21 @@ PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR, Platform.TEXT, Pl
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up PPA Contatto from a config entry."""
-    api = PPAContattoAPI(
-        hass, 
-        entry.data[CONF_EMAIL], 
-        entry.data[CONF_PASSWORD],
-        config_entry=entry
-    )
-    
+    api = PPAContattoAPI(hass, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD], config_entry=entry)
+
     coordinator = PPAContattoDataUpdateCoordinator(hass, api)
-    
+
     # Fetch initial data
     await coordinator.async_config_entry_first_refresh()
-    
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         "coordinator": coordinator,
     }
-    
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
+
     return True
 
 
@@ -48,7 +43,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
-    
+
     return unload_ok
 
 
@@ -69,7 +64,7 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
         """Update data via library."""
         try:
             devices = await self.api.get_devices()
-            
+
             # Enhance device data with latest status from reports
             enhanced_devices = []
             for device in devices:
@@ -82,9 +77,9 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                     except Exception as err:
                         _LOGGER.debug("Could not get latest status for %s: %s", serial, err)
                         device["latest_status"] = {"gate": None, "relay": None, "last_action": None, "last_user": None}
-                
+
                 enhanced_devices.append(device)
-            
+
             _LOGGER.debug("Updated data for %d devices", len(enhanced_devices))
             return {"devices": enhanced_devices}
         except PPAContattoAPIError as err:
@@ -95,4 +90,4 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
     async def async_request_refresh_with_delay(self, delay: float = 2.0) -> None:
         """Request refresh with a small delay to allow device status to update."""
         await asyncio.sleep(delay)
-        await self.async_request_refresh() 
+        await self.async_request_refresh()
