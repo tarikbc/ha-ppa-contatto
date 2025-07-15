@@ -6,7 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .config_entities import async_setup_entry as config_setup_entry
+from .config_entities import async_setup_config_texts
 
 
 async def async_setup_entry(
@@ -15,4 +15,4 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the PPA Contatto text platform."""
-    await config_setup_entry(hass, config_entry, async_add_entities, "text")
+    await async_setup_config_texts(hass, config_entry, async_add_entities)

@@ -19,13 +19,12 @@ from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(
+async def async_setup_config_switches(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    entity_type: str,
 ) -> None:
-    """Set up PPA Contatto configuration entities."""
+    """Set up PPA Contatto configuration switch entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     api = hass.data[DOMAIN][config_entry.entry_id]["api"]
 
@@ -36,8 +35,6 @@ async def async_setup_entry(
         serial = device.get("serial")
         if not serial:
             continue
-
-        if entity_type == "switch":
             # Configuration switches
             entities.extend(
                 [
@@ -85,31 +82,50 @@ async def async_setup_entry(
                     )
                 )
 
-        elif entity_type == "text":
-            # Name configuration text entities
-            if device.get("name", {}).get("gate"):
-                entities.append(
-                    PPAContattoNameText(
-                        coordinator,
-                        api,
-                        device,
-                        f"{serial}_gate_name",
-                        "Gate Name",
-                        DEVICE_TYPE_GATE,
-                    )
-                )
+    async_add_entities(entities)
 
-            if device.get("name", {}).get("relay"):
-                entities.append(
-                    PPAContattoNameText(
-                        coordinator,
-                        api,
-                        device,
-                        f"{serial}_relay_name",
-                        "Relay Name",
-                        DEVICE_TYPE_RELAY,
-                    )
+
+async def async_setup_config_texts(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up PPA Contatto configuration text entities."""
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    api = hass.data[DOMAIN][config_entry.entry_id]["api"]
+
+    entities = []
+
+    # Create configuration entities for each device
+    for device in coordinator.data.get("devices", []):
+        serial = device.get("serial")
+        if not serial:
+            continue
+
+        # Name configuration text entities
+        if device.get("name", {}).get("gate"):
+            entities.append(
+                PPAContattoNameText(
+                    coordinator,
+                    api,
+                    device,
+                    f"{serial}_gate_name",
+                    "Gate Name",
+                    DEVICE_TYPE_GATE,
                 )
+            )
+
+        if device.get("name", {}).get("relay"):
+            entities.append(
+                PPAContattoNameText(
+                    coordinator,
+                    api,
+                    device,
+                    f"{serial}_relay_name",
+                    "Relay Name",
+                    DEVICE_TYPE_RELAY,
+                )
+            )
 
     async_add_entities(entities)
 
