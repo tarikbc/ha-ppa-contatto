@@ -18,6 +18,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
+from .config_entities import get_device_display_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,8 +45,8 @@ async def async_setup_entry(
 
     entities = []
     for device in coordinator.data.get("devices", []):
-        if device.get("hardware"):
-            # Add relay duration configuration for devices with hardware
+        # Add relay duration configuration for devices that have relay functionality
+        if device.get("name", {}).get("relay"):
             entities.append(
                 PPAContattoRelayDurationNumber(
                     coordinator,
@@ -77,10 +78,10 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         # Add to device configuration category
         self._attr_entity_category = "config"
 
-        # Set device info
+        # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device["serial"])},
-            name=f"PPA Contatto {device['serial']}",
+            name=get_device_display_name(device),
             manufacturer="PPA Contatto",
             model="Gate Controller",
             sw_version=device.get("version"),

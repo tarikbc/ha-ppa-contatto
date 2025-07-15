@@ -20,6 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from .api import PPAContattoAPI
 from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
+from .config_entities import get_device_display_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,10 +96,10 @@ class PPAContattoBaseSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = name
         self._serial = device.get("serial")
 
-        # Set device info
+        # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"PPA Contatto {self._serial}",
+            name=get_device_display_name(device),
             manufacturer="PPA Contatto",
             model="Gate Controller",
             sw_version=device.get("version"),
