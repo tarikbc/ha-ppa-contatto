@@ -66,7 +66,7 @@ async def async_setup_entry(
                     DEVICE_TYPE_RELAY,
                     f"{serial}_door",
                     device.get("name", {}).get("relay", {}).get("name", "Door"),
-                    CoverDeviceClass.GARAGE,
+                    CoverDeviceClass.GATE,
                 )
             )
 
