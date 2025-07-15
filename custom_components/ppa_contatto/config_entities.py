@@ -56,52 +56,53 @@ async def async_setup_config_switches(
         serial = device.get("serial")
         if not serial:
             continue
-            # Configuration switches
-            entities.extend(
-                [
-                    PPAContattoConfigSwitch(
-                        coordinator,
-                        api,
-                        device,
-                        f"{serial}_favorite",
-                        "Favorite",
-                        "favorite",
-                    ),
-                    PPAContattoConfigSwitch(
-                        coordinator,
-                        api,
-                        device,
-                        f"{serial}_notifications",
-                        "Notifications",
-                        "notification",
-                    ),
-                ]
+
+        # Configuration switches
+        entities.extend(
+            [
+                PPAContattoConfigSwitch(
+                    coordinator,
+                    api,
+                    device,
+                    f"{serial}_favorite",
+                    "Favorite",
+                    "favorite",
+                ),
+                PPAContattoConfigSwitch(
+                    coordinator,
+                    api,
+                    device,
+                    f"{serial}_notifications",
+                    "Notifications",
+                    "notification",
+                ),
+            ]
+        )
+
+        # Show/hide switches for gate and relay
+        if device.get("name", {}).get("gate"):
+            entities.append(
+                PPAContattoVisibilitySwitch(
+                    coordinator,
+                    api,
+                    device,
+                    f"{serial}_gate_visible",
+                    "Gate Visible",
+                    DEVICE_TYPE_GATE,
+                )
             )
 
-            # Show/hide switches for gate and relay
-            if device.get("name", {}).get("gate"):
-                entities.append(
-                    PPAContattoVisibilitySwitch(
-                        coordinator,
-                        api,
-                        device,
-                        f"{serial}_gate_visible",
-                        "Gate Visible",
-                        DEVICE_TYPE_GATE,
-                    )
+        if device.get("name", {}).get("relay"):
+            entities.append(
+                PPAContattoVisibilitySwitch(
+                    coordinator,
+                    api,
+                    device,
+                    f"{serial}_relay_visible",
+                    "Relay Visible",
+                    DEVICE_TYPE_RELAY,
                 )
-
-            if device.get("name", {}).get("relay"):
-                entities.append(
-                    PPAContattoVisibilitySwitch(
-                        coordinator,
-                        api,
-                        device,
-                        f"{serial}_relay_visible",
-                        "Relay Visible",
-                        DEVICE_TYPE_RELAY,
-                    )
-                )
+            )
 
     async_add_entities(entities)
 
