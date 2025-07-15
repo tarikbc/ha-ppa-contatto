@@ -483,6 +483,13 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
                 # Notify all entities that the data has been updated
                 self.coordinator.async_set_updated_data(self.coordinator.data)
 
+                # Force immediate state refresh for all entities to pick up name changes
+                _LOGGER.debug("Forcing immediate state refresh for all entities after name change")
+                for entry in self.hass.data.get(DOMAIN, {}).values():
+                    coordinator = entry.get("coordinator")
+                    if coordinator:
+                        coordinator.async_update_listeners()
+
         except Exception as err:
             _LOGGER.warning("Failed to refresh device names for %s: %s", self._serial, err)
             # Fallback to regular coordinator refresh
