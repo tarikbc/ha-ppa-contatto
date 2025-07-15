@@ -262,6 +262,50 @@ git clone https://github.com/tarikbc/ha-ppa-contatto.git
 cd ha-ppa-contatto
 ```
 
+### Building Releases
+
+This project includes automated release scripts to ensure proper HACS compatibility:
+
+#### Using the Release Script
+
+```bash
+# Run the interactive release builder
+./release.sh
+
+# Or run the Python script directly
+python3 build_release.py
+```
+
+The script will:
+
+1. **Show current version** and suggest next versions (patch/minor/major)
+2. **Update manifest.json** with the new version
+3. **Create HACS-compatible zip** with correct structure (no extra folder levels)
+4. **Git commit and tag** the release
+5. **Create GitHub release** with zip file attached
+
+#### Manual Release Process
+
+If you prefer manual releases:
+
+```bash
+# 1. Update version in manifest.json
+# 2. Create properly structured zip
+cd custom_components
+zip -r ../ppa_contatto.zip ppa_contatto/ -x "ppa_contatto/__pycache__/*" "ppa_contatto/.DS_Store"
+
+# 3. Create git tag and release
+git add .
+git commit -m "Release vX.Y.Z"
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
+
+# 4. Create GitHub release and upload zip file
+```
+
+> **Important**: The zip structure must have integration files at the root, not inside a subfolder. HACS expects the files to be directly accessible when unzipped.
+
 ## Support
 
 - **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/tarikbc/ha-ppa-contatto/issues)
