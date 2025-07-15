@@ -41,5 +41,5 @@ AUTH_HEADERS: Final = {
     "Content-Type": "application/json",
 }
 
-# Update intervals  
+# Update intervals
 UPDATE_INTERVAL: Final = 3  # Poll every 3 seconds for faster name/state updates

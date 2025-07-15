@@ -9,10 +9,10 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers import device_registry as dr
 
 from .api import PPAContattoAPI
 from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
@@ -21,11 +21,11 @@ from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 def get_device_display_name(device: Dict[str, Any]) -> str:
     """Get the display name for a device based on API data."""
     serial = device.get("serial", "Unknown")
-    
+
     # Try to get custom names from the device
     gate_name = device.get("name", {}).get("gate", {}).get("name", "")
     relay_name = device.get("name", {}).get("relay", {}).get("name", "")
-    
+
     # Use the first available custom name, or fall back to serial
     if gate_name and relay_name:
         return f"{gate_name} / {relay_name}"
@@ -35,6 +35,7 @@ def get_device_display_name(device: Dict[str, Any]) -> str:
         return relay_name
     else:
         return f"PPA Contatto {serial}"
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -207,24 +208,23 @@ class PPAContattoConfigBase(CoordinatorEntity):
 
             # Get device registry
             device_registry = dr.async_get(self.hass)
-            
+
             # Find our device in the registry
-            ha_device = device_registry.async_get_device(
-                identifiers={(DOMAIN, self._serial)}
-            )
-            
+            ha_device = device_registry.async_get_device(identifiers={(DOMAIN, self._serial)})
+
             if ha_device:
                 # Calculate new device name
                 new_name = get_device_display_name(device)
-                
+
                 # Update device name if it changed
                 if ha_device.name != new_name:
-                    device_registry.async_update_device(
-                        ha_device.id,
-                        name=new_name
+                    device_registry.async_update_device(ha_device.id, name=new_name)
+                    _LOGGER.debug(
+                        "Updated device name in registry: %s -> %s",
+                        ha_device.name,
+                        new_name,
                     )
-                    _LOGGER.debug("Updated device name in registry: %s -> %s", ha_device.name, new_name)
-                    
+
         except Exception as err:
             _LOGGER.warning("Failed to update device name in registry: %s", err)
 
@@ -315,31 +315,36 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         """Build complete name payload preserving both gate and relay names."""
         current_names = device.get("name", {})
         name_payload = {}
-        
+
         # Preserve gate name and show settings
         if "gate" in current_names:
             gate_config = current_names["gate"]
             name_payload["gate"] = {
                 "name": gate_config.get("name", ""),
-                "show": gate_config.get("show", True)
+                "show": gate_config.get("show", True),
             }
-        
-        # Preserve relay name and show settings  
+
+        # Preserve relay name and show settings
         if "relay" in current_names:
             relay_config = current_names["relay"]
             name_payload["relay"] = {
                 "name": relay_config.get("name", ""),
-                "show": relay_config.get("show", True)
+                "show": relay_config.get("show", True),
             }
-        
+
         # Update the specific device type being changed
         if self._device_type not in name_payload:
             name_payload[self._device_type] = {"name": "", "show": True}
-            
+
         name_payload[self._device_type]["show"] = show_value
-        
-        _LOGGER.debug("Updating visibility for %s %s: show=%s", self._serial, self._device_type, show_value)
-        
+
+        _LOGGER.debug(
+            "Updating visibility for %s %s: show=%s",
+            self._serial,
+            self._device_type,
+            show_value,
+        )
+
         return {"name": name_payload}
 
 
@@ -371,45 +376,45 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
 
         # Get current name configuration for BOTH gate and relay to preserve both
         current_names = device.get("name", {})
-        
+
         # Build complete name payload with both gate and relay
         name_payload = {}
-        
+
         # Preserve gate name and show settings
         if "gate" in current_names:
             gate_config = current_names["gate"]
             name_payload["gate"] = {
                 "name": gate_config.get("name", ""),
-                "show": gate_config.get("show", True)
+                "show": gate_config.get("show", True),
             }
-        
-        # Preserve relay name and show settings  
+
+        # Preserve relay name and show settings
         if "relay" in current_names:
             relay_config = current_names["relay"]
             name_payload["relay"] = {
                 "name": relay_config.get("name", ""),
-                "show": relay_config.get("show", True)
+                "show": relay_config.get("show", True),
             }
-        
+
         # Update the specific device type being changed
         if self._device_type not in name_payload:
             name_payload[self._device_type] = {"name": "", "show": True}
-            
+
         name_payload[self._device_type]["name"] = value
-        
+
         # Send complete payload with both devices to preserve both names
         update_data = {"name": name_payload}
-        
+
         _LOGGER.debug("Updating device names for %s: %s", self._serial, name_payload)
-        
+
         # Update the device setting
         success = await self._update_device_setting(update_data)
-        
+
         if success:
-            # After successful name update, fetch the latest device data to ensure 
+            # After successful name update, fetch the latest device data to ensure
             # our storage reflects the current state from the API
             await self._refresh_device_names()
-            
+
             # Update the device name in Home Assistant device registry
             await self._update_device_name_in_registry()
 
@@ -418,28 +423,31 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         try:
             # Get fresh device list from API
             fresh_devices = await self._api.get_devices()
-            
+
             # Update coordinator data with fresh device information
-            if hasattr(self.coordinator, 'data') and 'devices' in self.coordinator.data:
+            if hasattr(self.coordinator, "data") and "devices" in self.coordinator.data:
                 # Find and update our specific device in the coordinator data
-                for i, device in enumerate(self.coordinator.data['devices']):
-                    if device.get('serial') == self._serial:
+                for i, device in enumerate(self.coordinator.data["devices"]):
+                    if device.get("serial") == self._serial:
                         # Find the corresponding fresh device data
                         for fresh_device in fresh_devices:
-                            if fresh_device.get('serial') == self._serial:
+                            if fresh_device.get("serial") == self._serial:
                                 # Preserve latest_status if it exists
-                                if 'latest_status' in device:
-                                    fresh_device['latest_status'] = device['latest_status']
-                                
+                                if "latest_status" in device:
+                                    fresh_device["latest_status"] = device["latest_status"]
+
                                 # Update with fresh data
-                                self.coordinator.data['devices'][i] = fresh_device
-                                _LOGGER.debug("Refreshed device data for %s with latest names", self._serial)
+                                self.coordinator.data["devices"][i] = fresh_device
+                                _LOGGER.debug(
+                                    "Refreshed device data for %s with latest names",
+                                    self._serial,
+                                )
                                 break
                         break
-                
+
                 # Notify all entities that the data has been updated
                 self.coordinator.async_set_updated_data(self.coordinator.data)
-                
+
         except Exception as err:
             _LOGGER.warning("Failed to refresh device names for %s: %s", self._serial, err)
             # Fallback to regular coordinator refresh
