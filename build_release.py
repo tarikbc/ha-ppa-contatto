@@ -155,7 +155,10 @@ def get_change_summary():
             elif line.strip().startswith("===== ") and in_summary:
                 break
             elif in_summary and line.strip():
-                summary_lines.append(line.strip())
+                # Filter out zip file changes as they're just build artifacts
+                line_lower = line.lower()
+                if not ('.zip' in line_lower and ('added' in line_lower or 'new' in line_lower or 'created' in line_lower)):
+                    summary_lines.append(line.strip())
         
         if not summary_lines:
             return "- Bug fixes and improvements\n- Updated integration components"
