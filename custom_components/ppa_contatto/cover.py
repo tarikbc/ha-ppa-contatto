@@ -100,6 +100,7 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         self._relay_duration: Optional[int] = None
         self._momentary_active: bool = False
         self._momentary_task: Optional[asyncio.Task] = None
+        self._gate_refresh_task: Optional[asyncio.Task] = None
 
         # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
@@ -146,6 +147,26 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
                 return not self._momentary_active
 
         return None
+
+    @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        device = self._get_device_data()
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # Get the current name from device data
+        name_config = device.get("name", {}).get(self._device_type, {})
+        current_name = name_config.get("name", "")
+
+        if current_name:
+            return current_name
+
+        # Fallback to default names if no custom name is set
+        if self._device_type == DEVICE_TYPE_GATE:
+            return "Gate"
+        else:  # DEVICE_TYPE_RELAY
+            return "Door"
 
     @property
     def is_opening(self) -> bool:
@@ -205,11 +226,18 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
                 await self._api.control_device(self._serial, self._device_type)
                 _LOGGER.debug("Successfully opened %s %s", self._device_type, self._serial)
 
-                # Schedule a delayed refresh to allow device status to update
-                if hasattr(self.coordinator, "async_request_refresh_with_delay"):
-                    asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
+                # For gates, schedule multiple refreshes to catch state changes
+                if self._device_type == DEVICE_TYPE_GATE:
+                    # Cancel any existing gate refresh task
+                    if self._gate_refresh_task and not self._gate_refresh_task.done():
+                        self._gate_refresh_task.cancel()
+                    self._gate_refresh_task = asyncio.create_task(self._refresh_gate_status())
                 else:
-                    await self.coordinator.async_request_refresh()
+                    # For toggle relays, single refresh is sufficient
+                    if hasattr(self.coordinator, "async_request_refresh_with_delay"):
+                        asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
+                    else:
+                        await self.coordinator.async_request_refresh()
 
         except Exception as err:
             _LOGGER.error("Failed to open %s %s: %s", self._device_type, self._serial, err)
@@ -223,10 +251,10 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
                 await self._api.control_device(self._serial, self._device_type)
                 _LOGGER.debug("Successfully closed toggle door %s", self._serial)
 
-                if hasattr(self.coordinator, "async_request_refresh_with_delay"):
-                    asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
-                else:
-                    await self.coordinator.async_request_refresh()
+                # Use multiple refreshes for better state tracking
+                if self._gate_refresh_task and not self._gate_refresh_task.done():
+                    self._gate_refresh_task.cancel()
+                self._gate_refresh_task = asyncio.create_task(self._refresh_gate_status())
             except Exception as err:
                 _LOGGER.error("Failed to close %s %s: %s", self._device_type, self._serial, err)
                 raise
@@ -281,6 +309,23 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             _LOGGER.error("Error in momentary door reset for %s: %s", self._serial, err)
             self._momentary_active = False
             self.async_write_ha_state()
+
+    async def _refresh_gate_status(self) -> None:
+        """Refresh gate status multiple times to catch state changes."""
+        try:
+            # Gates can take time to physically open/close and API to update
+            # Schedule multiple refreshes to ensure we catch the state change
+            refresh_delays = [1.0, 3.0, 6.0, 10.0]  # Staggered refreshes
+
+            for delay in refresh_delays:
+                await asyncio.sleep(delay)
+                await self.coordinator.async_request_refresh()
+                _LOGGER.debug("Refreshed gate status for %s after %s seconds", self._serial, delay)
+
+        except asyncio.CancelledError:
+            _LOGGER.debug("Gate status refresh cancelled for %s", self._serial)
+        except Exception as err:
+            _LOGGER.warning("Error refreshing gate status for %s: %s", self._serial, err)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -341,5 +386,12 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             self._momentary_task.cancel()
             try:
                 await self._momentary_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._gate_refresh_task and not self._gate_refresh_task.done():
+            self._gate_refresh_task.cancel()
+            try:
+                await self._gate_refresh_task
             except asyncio.CancelledError:
                 pass
