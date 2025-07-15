@@ -18,7 +18,6 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import PPAContattoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +39,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up PPA Contatto number entities."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    api = hass.data[DOMAIN][config_entry.entry_id]["api"]
 
     entities = []
     for device in coordinator.data:
@@ -62,7 +62,7 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
 
     def __init__(
         self,
-        coordinator: PPAContattoCoordinator,
+        coordinator,
         device: dict[str, Any],
         description: NumberEntityDescription,
     ) -> None:
