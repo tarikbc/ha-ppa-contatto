@@ -12,9 +12,29 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers import device_registry as dr
 
 from .api import PPAContattoAPI
 from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
+
+
+def get_device_display_name(device: Dict[str, Any]) -> str:
+    """Get the display name for a device based on API data."""
+    serial = device.get("serial", "Unknown")
+    
+    # Try to get custom names from the device
+    gate_name = device.get("name", {}).get("gate", {}).get("name", "")
+    relay_name = device.get("name", {}).get("relay", {}).get("name", "")
+    
+    # Use the first available custom name, or fall back to serial
+    if gate_name and relay_name:
+        return f"{gate_name} / {relay_name}"
+    elif gate_name:
+        return gate_name
+    elif relay_name:
+        return relay_name
+    else:
+        return f"PPA Contatto {serial}"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,10 +170,10 @@ class PPAContattoConfigBase(CoordinatorEntity):
         self._serial = device.get("serial")
         self._attr_entity_category = EntityCategory.CONFIG
 
-        # Set device info
+        # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"PPA Contatto {self._serial}",
+            name=get_device_display_name(device),
             manufacturer="PPA Contatto",
             model="Gate Controller",
             sw_version=device.get("version"),
@@ -177,6 +197,36 @@ class PPAContattoConfigBase(CoordinatorEntity):
         except Exception as err:
             _LOGGER.error("Failed to update device setting: %s", err)
             return False
+
+    async def _update_device_name_in_registry(self) -> None:
+        """Update device name in Home Assistant device registry."""
+        try:
+            device = self._get_device_data()
+            if not device:
+                return
+
+            # Get device registry
+            device_registry = dr.async_get(self.hass)
+            
+            # Find our device in the registry
+            ha_device = device_registry.async_get_device(
+                identifiers={(DOMAIN, self._serial)}
+            )
+            
+            if ha_device:
+                # Calculate new device name
+                new_name = get_device_display_name(device)
+                
+                # Update device name if it changed
+                if ha_device.name != new_name:
+                    device_registry.async_update_device(
+                        ha_device.id,
+                        name=new_name
+                    )
+                    _LOGGER.debug("Updated device name in registry: %s -> %s", ha_device.name, new_name)
+                    
+        except Exception as err:
+            _LOGGER.warning("Failed to update device name in registry: %s", err)
 
 
 class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
@@ -244,6 +294,8 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         success = await self._update_device_setting(update_data)
         if success:
             await self.coordinator.async_request_refresh()
+            # Update device name in registry since visibility might affect display name
+            await self._update_device_name_in_registry()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Hide the device."""
@@ -256,6 +308,8 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         success = await self._update_device_setting(update_data)
         if success:
             await self.coordinator.async_request_refresh()
+            # Update device name in registry since visibility might affect display name
+            await self._update_device_name_in_registry()
 
     def _build_visibility_payload(self, device: Dict[str, Any], show_value: bool) -> Dict[str, Any]:
         """Build complete name payload preserving both gate and relay names."""
@@ -355,6 +409,9 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
             # After successful name update, fetch the latest device data to ensure 
             # our storage reflects the current state from the API
             await self._refresh_device_names()
+            
+            # Update the device name in Home Assistant device registry
+            await self._update_device_name_in_registry()
 
     async def _refresh_device_names(self) -> None:
         """Fetch latest device data and update coordinator storage."""
