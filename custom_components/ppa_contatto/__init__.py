@@ -7,12 +7,13 @@ import logging
 from datetime import timedelta
 from typing import Any, Dict
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import PPAContattoAPI, PPAContattoAPIError
+from .api import PPAContattoAPI, PPAContattoAPIError, PPAContattoAuthError
 from .const import DOMAIN, UPDATE_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> Dict[str, Any]:
         """Update data via library."""
         try:
+            _LOGGER.debug("Starting data update from PPA Contatto API")
             devices = await self.api.get_devices()
 
             # Enhance device data with latest status from reports
@@ -92,11 +94,26 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
 
                 enhanced_devices.append(device)
 
-            _LOGGER.debug("Updated data for %d devices", len(enhanced_devices))
+            _LOGGER.debug("Successfully updated data for %d devices", len(enhanced_devices))
             return {"devices": enhanced_devices}
+
+        except asyncio.TimeoutError as err:
+            _LOGGER.warning("PPA Contatto API timeout - server not responding")
+            raise UpdateFailed("PPA Contatto API timeout - server not responding") from err
+        except aiohttp.ClientConnectorError as err:
+            _LOGGER.warning("Cannot connect to PPA Contatto API: %s", err)
+            raise UpdateFailed(f"Cannot connect to PPA Contatto API: {err}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.warning("Network error connecting to PPA Contatto API: %s", err)
+            raise UpdateFailed(f"Network error connecting to PPA Contatto API: {err}") from err
+        except PPAContattoAuthError as err:
+            _LOGGER.error("PPA Contatto authentication failed: %s", err)
+            raise UpdateFailed(f"PPA Contatto authentication failed: {err}") from err
         except PPAContattoAPIError as err:
-            raise UpdateFailed(f"Error communicating with API: {err}") from err
+            _LOGGER.warning("PPA Contatto API error: %s", err)
+            raise UpdateFailed(f"PPA Contatto API error: {err}") from err
         except Exception as err:
+            _LOGGER.error("Unexpected error updating PPA Contatto data: %s", err)
             raise UpdateFailed(f"Unexpected error: {err}") from err
 
     async def async_request_refresh_with_delay(self, delay: float = 2.0) -> None:

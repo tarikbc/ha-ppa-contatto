@@ -12,8 +12,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
+    API_TIMEOUT,
     AUTH_HEADERS,
     AUTH_URL,
+    CONNECTION_TIMEOUT,
     DEFAULT_HEADERS,
     DEVICE_CONFIG_ENDPOINT,
     DEVICE_CONTROL_ENDPOINT,
@@ -62,7 +64,10 @@ class PPAContattoAPI:
             try:
                 auth_data = {"email": self.email, "password": self.password}
 
-                async with self.session.post(AUTH_URL, headers=AUTH_HEADERS, data=json.dumps(auth_data)) as response:
+                timeout = aiohttp.ClientTimeout(total=API_TIMEOUT, connect=CONNECTION_TIMEOUT)
+                async with self.session.post(
+                    AUTH_URL, headers=AUTH_HEADERS, data=json.dumps(auth_data), timeout=timeout
+                ) as response:
                     if response.status != 200:
                         _LOGGER.error(
                             "Authentication failed with status %s: %s",
@@ -126,7 +131,10 @@ class PPAContattoAPI:
             # Try to find refresh endpoint (this might need adjustment based on actual API)
             refresh_url = "https://auth.ppacontatto.com.br/refresh"  # Assuming this exists
 
-            async with self.session.post(refresh_url, headers=AUTH_HEADERS, data=json.dumps(refresh_data)) as response:
+            timeout = aiohttp.ClientTimeout(total=API_TIMEOUT, connect=CONNECTION_TIMEOUT)
+            async with self.session.post(
+                refresh_url, headers=AUTH_HEADERS, data=json.dumps(refresh_data), timeout=timeout
+            ) as response:
                 if response.status == 200:
                     data = await response.json()
                     self.access_token = data.get("accessToken")
@@ -152,7 +160,8 @@ class PPAContattoAPI:
         headers["Authorization"] = f"Bearer {self.access_token}"
 
         try:
-            async with self.session.request(method, url, headers=headers, **kwargs) as response:
+            timeout = aiohttp.ClientTimeout(total=API_TIMEOUT, connect=CONNECTION_TIMEOUT)
+            async with self.session.request(method, url, headers=headers, timeout=timeout, **kwargs) as response:
                 if response.status in (401, 400):
                     # 401 = unauthorized, 400 might also be auth-related
                     error_text = await response.text()
@@ -162,7 +171,9 @@ class PPAContattoAPI:
                     if await self._refresh_access_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
 
-                        async with self.session.request(method, url, headers=headers, **kwargs) as retry_response:
+                        async with self.session.request(
+                            method, url, headers=headers, timeout=timeout, **kwargs
+                        ) as retry_response:
                             if retry_response.status == 200:
                                 return await retry_response.json()
 
@@ -185,6 +196,12 @@ class PPAContattoAPI:
 
                 return await response.json()
 
+        except asyncio.TimeoutError as err:
+            _LOGGER.error("API request timeout: %s", err)
+            raise PPAContattoAPIError(f"API timeout: {err}") from err
+        except aiohttp.ClientConnectorError as err:
+            _LOGGER.error("Cannot connect to API server: %s", err)
+            raise PPAContattoAPIError(f"Connection error: {err}") from err
         except aiohttp.ClientError as err:
             _LOGGER.error("Network error during API request: %s", err)
             raise PPAContattoAPIError(f"Network error: {err}") from err
@@ -198,7 +215,8 @@ class PPAContattoAPI:
         headers["Authorization"] = f"Bearer {self.access_token}"
 
         try:
-            async with self.session.request(method, url, headers=headers, **kwargs) as response:
+            timeout = aiohttp.ClientTimeout(total=API_TIMEOUT, connect=CONNECTION_TIMEOUT)
+            async with self.session.request(method, url, headers=headers, timeout=timeout, **kwargs) as response:
                 if response.status in (401, 400):
                     # 401 = unauthorized, 400 might also be auth-related
                     error_text = await response.text()
@@ -208,7 +226,9 @@ class PPAContattoAPI:
                     if await self._refresh_access_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
 
-                        async with self.session.request(method, url, headers=headers, **kwargs) as retry_response:
+                        async with self.session.request(
+                            method, url, headers=headers, timeout=timeout, **kwargs
+                        ) as retry_response:
                             if retry_response.status == 200:
                                 return await retry_response.text()
 
