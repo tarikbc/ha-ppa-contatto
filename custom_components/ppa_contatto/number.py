@@ -111,6 +111,24 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         # Default to 1000ms (1 second) for momentary behavior
         return 1000.0
 
+    @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        # Get fresh device data from coordinator
+        devices = self.coordinator.data.get("devices", [])
+        device = None
+        for d in devices:
+            if d.get("serial") == self.device["serial"]:
+                device = d
+                break
+
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # Get device display name and combine with entity type
+        device_name = get_device_display_name(device)
+        return f"{device_name} {self.entity_description.name}"
+
     async def async_set_native_value(self, value: float) -> None:
         """Set the relay duration."""
         try:

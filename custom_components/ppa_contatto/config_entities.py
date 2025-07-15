@@ -228,6 +228,21 @@ class PPAContattoConfigBase(CoordinatorEntity):
         except Exception as err:
             _LOGGER.warning("Failed to update device name in registry: %s", err)
 
+    @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        device = self._get_device_data()
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # Get device display name and combine with config entity type
+        device_name = get_device_display_name(device)
+
+        # Extract the config type from original name (e.g., "Favorite", "Gate Name")
+        config_type = self._attr_name
+
+        return f"{device_name} {config_type}"
+
 
 class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
     """Configuration switch for device settings."""
