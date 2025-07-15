@@ -115,6 +115,28 @@ class PPAContattoBaseSensor(CoordinatorEntity, SensorEntity):
                 return device
         return None
 
+    @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        # For sensors, we keep the original descriptive names but just update the device prefix
+        device = self._get_device_data()
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # Extract the sensor type from original name (e.g., "Last Action", "Gate Status")
+        serial = device.get("serial", "")
+        original_name = self._attr_name
+
+        # If the original name contains the serial, extract just the sensor type
+        if serial in original_name:
+            sensor_type = original_name.replace(f"{serial}_", "").replace("_", " ").title()
+        else:
+            sensor_type = original_name
+
+        # Get device display name and combine with sensor type
+        device_name = get_device_display_name(device)
+        return f"{device_name} {sensor_type}"
+
 
 class PPAContattoLastActionSensor(PPAContattoBaseSensor):
     """Sensor for the last action timestamp."""
