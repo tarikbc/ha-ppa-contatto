@@ -43,7 +43,7 @@ async def async_setup_entry(
     api = hass.data[DOMAIN][config_entry.entry_id]["api"]
 
     entities = []
-    for device in coordinator.data:
+    for device in coordinator.data.get("devices", []):
         if device.get("hardware"):
             # Add relay duration configuration for devices with hardware
             entities.append(
