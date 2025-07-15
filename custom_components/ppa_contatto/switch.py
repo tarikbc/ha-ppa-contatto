@@ -166,24 +166,18 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         """Turn the switch on."""
         try:
             await self._api.control_device(self._serial, self._device_type)
-            _LOGGER.debug(
-                "Successfully activated %s %s", self._device_type, self._serial
-            )
+            _LOGGER.debug("Successfully activated %s %s", self._device_type, self._serial)
 
             # Schedule a delayed refresh to allow device status to update
             # Use asyncio.create_task to not block the response
             if hasattr(self.coordinator, "async_request_refresh_with_delay"):
-                asyncio.create_task(
-                    self.coordinator.async_request_refresh_with_delay(1.5)
-                )
+                asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
             else:
                 # Fallback to immediate refresh
                 await self.coordinator.async_request_refresh()
 
         except Exception as err:
-            _LOGGER.error(
-                "Failed to turn on %s %s: %s", self._device_type, self._serial, err
-            )
+            _LOGGER.error("Failed to turn on %s %s: %s", self._device_type, self._serial, err)
             raise
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -229,8 +223,6 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
                 attrs["latest_relay_status"] = latest_status["relay"]
             # Add note about momentary behavior
             attrs["behavior"] = "momentary_button"
-            attrs[
-                "note"
-            ] = "Relay acts as momentary button - briefly shows 'on' when activated"
+            attrs["note"] = "Relay acts as momentary button - briefly shows 'on' when activated"
 
         return attrs

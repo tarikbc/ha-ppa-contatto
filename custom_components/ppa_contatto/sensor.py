@@ -42,18 +42,10 @@ async def async_setup_entry(
             continue
 
         # Add last action sensor
-        entities.append(
-            PPAContattoLastActionSensor(
-                coordinator, api, device, f"{serial}_last_action", "Last Action"
-            )
-        )
+        entities.append(PPAContattoLastActionSensor(coordinator, api, device, f"{serial}_last_action", "Last Action"))
 
         # Add last user sensor
-        entities.append(
-            PPAContattoLastUserSensor(
-                coordinator, api, device, f"{serial}_last_user", "Last User"
-            )
-        )
+        entities.append(PPAContattoLastUserSensor(coordinator, api, device, f"{serial}_last_user", "Last User"))
 
         # Add gate status sensor if gate is shown
         if device.get("name", {}).get("gate", {}).get("show", False):
