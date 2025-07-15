@@ -125,9 +125,8 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         if not device:
             return self._attr_name  # Fallback to original name
 
-        # Get device display name and combine with entity type
-        device_name = get_device_display_name(device)
-        return f"{device_name} {self.entity_description.name}"
+        # For relay duration, use clear label
+        return "Relay Duration"
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the relay duration."""
