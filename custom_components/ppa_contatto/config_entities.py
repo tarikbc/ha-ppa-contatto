@@ -1,4 +1,5 @@
 """Configuration entities for PPA Contatto settings."""
+
 from __future__ import annotations
 
 import logging
@@ -40,9 +41,21 @@ async def async_setup_entry(
             # Configuration switches
             entities.extend(
                 [
-                    PPAContattoConfigSwitch(coordinator, api, device, f"{serial}_favorite", "Favorite", "favorite"),
                     PPAContattoConfigSwitch(
-                        coordinator, api, device, f"{serial}_notifications", "Notifications", "notification"
+                        coordinator,
+                        api,
+                        device,
+                        f"{serial}_favorite",
+                        "Favorite",
+                        "favorite",
+                    ),
+                    PPAContattoConfigSwitch(
+                        coordinator,
+                        api,
+                        device,
+                        f"{serial}_notifications",
+                        "Notifications",
+                        "notification",
                     ),
                 ]
             )
@@ -51,14 +64,24 @@ async def async_setup_entry(
             if device.get("name", {}).get("gate"):
                 entities.append(
                     PPAContattoVisibilitySwitch(
-                        coordinator, api, device, f"{serial}_gate_visible", "Gate Visible", DEVICE_TYPE_GATE
+                        coordinator,
+                        api,
+                        device,
+                        f"{serial}_gate_visible",
+                        "Gate Visible",
+                        DEVICE_TYPE_GATE,
                     )
                 )
 
             if device.get("name", {}).get("relay"):
                 entities.append(
                     PPAContattoVisibilitySwitch(
-                        coordinator, api, device, f"{serial}_relay_visible", "Relay Visible", DEVICE_TYPE_RELAY
+                        coordinator,
+                        api,
+                        device,
+                        f"{serial}_relay_visible",
+                        "Relay Visible",
+                        DEVICE_TYPE_RELAY,
                     )
                 )
 
@@ -66,13 +89,25 @@ async def async_setup_entry(
             # Name configuration text entities
             if device.get("name", {}).get("gate"):
                 entities.append(
-                    PPAContattoNameText(coordinator, api, device, f"{serial}_gate_name", "Gate Name", DEVICE_TYPE_GATE)
+                    PPAContattoNameText(
+                        coordinator,
+                        api,
+                        device,
+                        f"{serial}_gate_name",
+                        "Gate Name",
+                        DEVICE_TYPE_GATE,
+                    )
                 )
 
             if device.get("name", {}).get("relay"):
                 entities.append(
                     PPAContattoNameText(
-                        coordinator, api, device, f"{serial}_relay_name", "Relay Name", DEVICE_TYPE_RELAY
+                        coordinator,
+                        api,
+                        device,
+                        f"{serial}_relay_name",
+                        "Relay Name",
+                        DEVICE_TYPE_RELAY,
                     )
                 )
 
@@ -169,7 +204,9 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         """Initialize the visibility switch."""
         super().__init__(coordinator, api, device, unique_id, name)
         self._device_type = device_type
-        self._attr_icon = "mdi:eye" if device_type == DEVICE_TYPE_GATE else "mdi:eye-outline"
+        self._attr_icon = (
+            "mdi:eye" if device_type == DEVICE_TYPE_GATE else "mdi:eye-outline"
+        )
 
     @property
     def is_on(self) -> bool:
@@ -189,7 +226,9 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
 
         # Preserve current name while setting show=True
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {"name": {self._device_type: {"name": current_name, "show": True}}}
+        update_data = {
+            "name": {self._device_type: {"name": current_name, "show": True}}
+        }
         await self._update_device_setting(update_data)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -200,7 +239,9 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
 
         # Preserve current name while setting show=False
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {"name": {self._device_type: {"name": current_name, "show": False}}}
+        update_data = {
+            "name": {self._device_type: {"name": current_name, "show": False}}
+        }
         await self._update_device_setting(update_data)
 
 
@@ -231,6 +272,10 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
             return
 
         # Preserve current show setting while updating name
-        current_show = device.get("name", {}).get(self._device_type, {}).get("show", True)
-        update_data = {"name": {self._device_type: {"name": value, "show": current_show}}}
+        current_show = (
+            device.get("name", {}).get(self._device_type, {}).get("show", True)
+        )
+        update_data = {
+            "name": {self._device_type: {"name": value, "show": current_show}}
+        }
         await self._update_device_setting(update_data)

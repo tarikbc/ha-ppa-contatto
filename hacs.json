@@ -1,9 +1,7 @@
 {
   "name": "PPA Contatto",
   "hacs": "1.6.0",
-  "domains": ["switch", "sensor", "number", "text"],
   "homeassistant": "2023.4.0",
-  "iot_class": "Cloud Polling",
   "render_readme": true,
   "zip_release": true,
   "filename": "ppa_contatto.zip"
