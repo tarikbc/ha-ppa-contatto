@@ -137,10 +137,10 @@ def get_change_summary():
         return "- Bug fixes and improvements\n- Updated integration components\n- Enhanced stability and performance"
     
     try:
-        # Get latest commit hash
-        commit_hash = run_command("git rev-parse HEAD")
+        # Get the previous commit hash (before version bump)
+        commit_hash = run_command("git rev-parse HEAD~1")
         
-        # Run reportgen on the latest commit
+        # Run reportgen on the previous commit to see actual changes
         reportgen_output = run_command(f"reportgen {commit_hash}")
         
         # Extract the change summary section
