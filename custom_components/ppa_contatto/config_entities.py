@@ -191,10 +191,58 @@ class PPAContattoConfigBase(CoordinatorEntity):
                 return device
         return None
 
-    async def _update_device_setting(self, data: Dict[str, Any]) -> bool:
-        """Update device setting via API."""
+    async def _build_complete_device_payload(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Build complete device payload preserving all existing settings."""
+        device = self._get_device_data()
+        if not device:
+            return updates
+
+        # Start with a complete payload containing all current device settings
+        complete_payload = {}
+
+        # Preserve name configuration (gate and relay)
+        current_names = device.get("name", {})
+        if current_names:
+            complete_payload["name"] = {
+                "gate": {
+                    "name": current_names.get("gate", {}).get("name", ""),
+                    "show": current_names.get("gate", {}).get("show", True),
+                },
+                "relay": {
+                    "name": current_names.get("relay", {}).get("name", ""),
+                    "show": current_names.get("relay", {}).get("show", True),
+                },
+            }
+
+        # Preserve other device settings
+        complete_payload["favorite"] = device.get("favorite", False)
+        complete_payload["notification"] = device.get("notification", False)
+
+        # Apply the updates on top of the complete payload
+        if "name" in updates:
+            # For name updates, merge carefully to preserve both gate and relay
+            if "name" not in complete_payload:
+                complete_payload["name"] = {}
+
+            update_names = updates["name"]
+            for device_type in ["gate", "relay"]:
+                if device_type in update_names:
+                    if device_type not in complete_payload["name"]:
+                        complete_payload["name"][device_type] = {"name": "", "show": True}
+                    complete_payload["name"][device_type].update(update_names[device_type])
+        else:
+            # For other updates, apply directly
+            complete_payload.update(updates)
+
+        _LOGGER.debug("Built complete device payload for %s: %s", self._serial, complete_payload)
+        return complete_payload
+
+    async def _update_device_setting(self, updates: Dict[str, Any]) -> bool:
+        """Update device setting via API with complete payload."""
         try:
-            success = await self._api.update_device_settings(self._serial, data)
+            # Always build and send the complete device configuration
+            complete_payload = await self._build_complete_device_payload(updates)
+            success = await self._api.update_device_settings(self._serial, complete_payload)
             return success
         except Exception as err:
             _LOGGER.error("Failed to update device setting: %s", err)
@@ -229,21 +277,6 @@ class PPAContattoConfigBase(CoordinatorEntity):
         except Exception as err:
             _LOGGER.warning("Failed to update device name in registry: %s", err)
 
-    @property
-    def name(self) -> str:
-        """Return the current entity name from coordinator data."""
-        device = self._get_device_data()
-        if not device:
-            return self._attr_name  # Fallback to original name
-
-        # Get device display name and combine with config entity type
-        device_name = get_device_display_name(device)
-
-        # Extract the config type from original name (e.g., "Favorite", "Gate Name")
-        config_type = self._attr_name
-
-        return f"{device_name} {config_type}"
-
 
 class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
     """Configuration switch for device settings."""
@@ -260,6 +293,24 @@ class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
             self._attr_icon = "mdi:bell"
 
     @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        device = self._get_device_data()
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # For general device settings, use device name + setting type
+        device_name = get_device_display_name(device)
+
+        # Use clearer setting names
+        if self._setting_key == "favorite":
+            return f"{device_name} Favorite"
+        elif self._setting_key == "notification":
+            return f"{device_name} Notifications"
+        else:
+            return f"{device_name} {self._attr_name}"
+
+    @property
     def is_on(self) -> bool:
         """Return true if the setting is enabled."""
         device = self._get_device_data()
@@ -269,12 +320,14 @@ class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the setting on."""
+        _LOGGER.debug("Turning on %s for %s", self._setting_key, self._serial)
         success = await self._update_device_setting({self._setting_key: True})
         if success:
             await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the setting off."""
+        _LOGGER.debug("Turning off %s for %s", self._setting_key, self._serial)
         success = await self._update_device_setting({self._setting_key: False})
         if success:
             await self.coordinator.async_request_refresh()
@@ -288,6 +341,21 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         super().__init__(coordinator, api, device, unique_id, name)
         self._device_type = device_type
         self._attr_icon = "mdi:eye" if device_type == DEVICE_TYPE_GATE else "mdi:eye-outline"
+
+    @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        device = self._get_device_data()
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # For visibility switches, use clear labels based on device type
+        if self._device_type == DEVICE_TYPE_GATE:
+            gate_name = device.get("name", {}).get("gate", {}).get("name", "Gate")
+            return f"Show {gate_name}"
+        else:  # DEVICE_TYPE_RELAY
+            relay_name = device.get("name", {}).get("relay", {}).get("name", "Door")
+            return f"Show {relay_name}"
 
     @property
     def is_on(self) -> bool:
@@ -305,8 +373,9 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         if not device:
             return
 
-        # Build complete name payload preserving both gate and relay
-        update_data = self._build_visibility_payload(device, True)
+        # Build update for just this device type's visibility
+        update_data = {"name": {self._device_type: {"show": True}}}
+
         success = await self._update_device_setting(update_data)
         if success:
             await self.coordinator.async_request_refresh()
@@ -319,49 +388,14 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         if not device:
             return
 
-        # Build complete name payload preserving both gate and relay
-        update_data = self._build_visibility_payload(device, False)
+        # Build update for just this device type's visibility
+        update_data = {"name": {self._device_type: {"show": False}}}
+
         success = await self._update_device_setting(update_data)
         if success:
             await self.coordinator.async_request_refresh()
             # Update device name in registry since visibility might affect display name
             await self._update_device_name_in_registry()
-
-    def _build_visibility_payload(self, device: Dict[str, Any], show_value: bool) -> Dict[str, Any]:
-        """Build complete name payload preserving both gate and relay names."""
-        current_names = device.get("name", {})
-        name_payload = {}
-
-        # Preserve gate name and show settings
-        if "gate" in current_names:
-            gate_config = current_names["gate"]
-            name_payload["gate"] = {
-                "name": gate_config.get("name", ""),
-                "show": gate_config.get("show", True),
-            }
-
-        # Preserve relay name and show settings
-        if "relay" in current_names:
-            relay_config = current_names["relay"]
-            name_payload["relay"] = {
-                "name": relay_config.get("name", ""),
-                "show": relay_config.get("show", True),
-            }
-
-        # Update the specific device type being changed
-        if self._device_type not in name_payload:
-            name_payload[self._device_type] = {"name": "", "show": True}
-
-        name_payload[self._device_type]["show"] = show_value
-
-        _LOGGER.debug(
-            "Updating visibility for %s %s: show=%s",
-            self._serial,
-            self._device_type,
-            show_value,
-        )
-
-        return {"name": name_payload}
 
 
 class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
@@ -373,6 +407,19 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         self._device_type = device_type
         self._attr_icon = "mdi:rename-box"
         self._attr_mode = "text"
+
+    @property
+    def name(self) -> str:
+        """Return the current entity name from coordinator data."""
+        device = self._get_device_data()
+        if not device:
+            return self._attr_name  # Fallback to original name
+
+        # For name text entities, use simple clear labels
+        if self._device_type == DEVICE_TYPE_GATE:
+            return "Gate Name"
+        else:  # DEVICE_TYPE_RELAY
+            return "Door Name"
 
     @property
     def native_value(self) -> Optional[str]:
@@ -390,40 +437,12 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         if not device:
             return
 
-        # Get current name configuration for BOTH gate and relay to preserve both
-        current_names = device.get("name", {})
+        # Build update for just this device type's name
+        update_data = {"name": {self._device_type: {"name": value}}}
 
-        # Build complete name payload with both gate and relay
-        name_payload = {}
+        _LOGGER.debug("Updating device name for %s %s: %s", self._serial, self._device_type, value)
 
-        # Preserve gate name and show settings
-        if "gate" in current_names:
-            gate_config = current_names["gate"]
-            name_payload["gate"] = {
-                "name": gate_config.get("name", ""),
-                "show": gate_config.get("show", True),
-            }
-
-        # Preserve relay name and show settings
-        if "relay" in current_names:
-            relay_config = current_names["relay"]
-            name_payload["relay"] = {
-                "name": relay_config.get("name", ""),
-                "show": relay_config.get("show", True),
-            }
-
-        # Update the specific device type being changed
-        if self._device_type not in name_payload:
-            name_payload[self._device_type] = {"name": "", "show": True}
-
-        name_payload[self._device_type]["name"] = value
-
-        # Send complete payload with both devices to preserve both names
-        update_data = {"name": name_payload}
-
-        _LOGGER.debug("Updating device names for %s: %s", self._serial, name_payload)
-
-        # Update the device setting
+        # Update the device setting (complete payload will be built automatically)
         success = await self._update_device_setting(update_data)
 
         if success:
