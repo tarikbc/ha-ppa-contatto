@@ -4,8 +4,8 @@ Control your PPA Contatto gates and relays directly from Home Assistant!
 
 ## Features
 
-🚪 **Gate Control** - Open/close gates remotely
-🔌 **Relay Control** - Control relays with configurable duration
+🚪 **Gate Control** - Open/close gates remotely via cover entities
+🔌 **Door Control** - Control doors via relay with configurable duration
 📊 **Status Monitoring** - Real-time status updates
 👤 **Activity Tracking** - See who performed actions and when
 ⚙️ **Device Configuration** - Customize names, notifications, and behavior
@@ -13,11 +13,11 @@ Control your PPA Contatto gates and relays directly from Home Assistant!
 
 ## What you get
 
-- **Switch Entities**: Control gates and relays
+- **Cover Entities**: Control gates and doors (open/close actions)
+- **Switch Entities**: Configure device settings (favorites, notifications, visibility)
 - **Sensor Entities**: Monitor status and activity history
 - **Number Entities**: Configure relay pulse duration
 - **Text Entities**: Customize device names
-- **Configuration Entities**: Manage favorites, notifications, visibility
 
 ## Requirements
 

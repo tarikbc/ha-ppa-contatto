@@ -18,6 +18,7 @@ from .const import DOMAIN, UPDATE_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
+    Platform.COVER,
     Platform.SWITCH,
     Platform.SENSOR,
     Platform.TEXT,

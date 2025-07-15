@@ -45,8 +45,13 @@ async def async_setup_entry(
 
     entities = []
     for device in coordinator.data.get("devices", []):
-        # Add relay duration configuration for devices that have relay functionality
-        if device.get("name", {}).get("relay"):
+        serial = device.get("serial", "unknown")
+        _LOGGER.info("Processing device %s for relay duration: %s", serial, device)
+        
+        # Add relay duration configuration for any PPA Contatto device
+        # (all PPA devices have relay functionality)
+        if serial and serial != "unknown":
+            _LOGGER.info("Creating relay duration entity for device %s", serial)
             entities.append(
                 PPAContattoRelayDurationNumber(
                     coordinator,
@@ -54,6 +59,8 @@ async def async_setup_entry(
                     RELAY_DURATION_DESCRIPTION,
                 )
             )
+        else:
+            _LOGGER.warning("Device %s missing serial number, skipping relay duration entity", device)
 
     async_add_entities(entities)
 
