@@ -239,9 +239,8 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         if not device:
             return
 
-        # Preserve current name while setting show=True
-        current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {"name": {self._device_type: {"name": current_name, "show": True}}}
+        # Build complete name payload preserving both gate and relay
+        update_data = self._build_visibility_payload(device, True)
         success = await self._update_device_setting(update_data)
         if success:
             await self.coordinator.async_request_refresh()
@@ -252,12 +251,42 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         if not device:
             return
 
-        # Preserve current name while setting show=False
-        current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {"name": {self._device_type: {"name": current_name, "show": False}}}
+        # Build complete name payload preserving both gate and relay
+        update_data = self._build_visibility_payload(device, False)
         success = await self._update_device_setting(update_data)
         if success:
             await self.coordinator.async_request_refresh()
+
+    def _build_visibility_payload(self, device: Dict[str, Any], show_value: bool) -> Dict[str, Any]:
+        """Build complete name payload preserving both gate and relay names."""
+        current_names = device.get("name", {})
+        name_payload = {}
+        
+        # Preserve gate name and show settings
+        if "gate" in current_names:
+            gate_config = current_names["gate"]
+            name_payload["gate"] = {
+                "name": gate_config.get("name", ""),
+                "show": gate_config.get("show", True)
+            }
+        
+        # Preserve relay name and show settings  
+        if "relay" in current_names:
+            relay_config = current_names["relay"]
+            name_payload["relay"] = {
+                "name": relay_config.get("name", ""),
+                "show": relay_config.get("show", True)
+            }
+        
+        # Update the specific device type being changed
+        if self._device_type not in name_payload:
+            name_payload[self._device_type] = {"name": "", "show": True}
+            
+        name_payload[self._device_type]["show"] = show_value
+        
+        _LOGGER.debug("Updating visibility for %s %s: show=%s", self._serial, self._device_type, show_value)
+        
+        return {"name": name_payload}
 
 
 class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
@@ -286,9 +315,38 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         if not device:
             return
 
-        # Preserve current show setting while updating name
-        current_show = device.get("name", {}).get(self._device_type, {}).get("show", True)
-        update_data = {"name": {self._device_type: {"name": value, "show": current_show}}}
+        # Get current name configuration for BOTH gate and relay to preserve both
+        current_names = device.get("name", {})
+        
+        # Build complete name payload with both gate and relay
+        name_payload = {}
+        
+        # Preserve gate name and show settings
+        if "gate" in current_names:
+            gate_config = current_names["gate"]
+            name_payload["gate"] = {
+                "name": gate_config.get("name", ""),
+                "show": gate_config.get("show", True)
+            }
+        
+        # Preserve relay name and show settings  
+        if "relay" in current_names:
+            relay_config = current_names["relay"]
+            name_payload["relay"] = {
+                "name": relay_config.get("name", ""),
+                "show": relay_config.get("show", True)
+            }
+        
+        # Update the specific device type being changed
+        if self._device_type not in name_payload:
+            name_payload[self._device_type] = {"name": "", "show": True}
+            
+        name_payload[self._device_type]["name"] = value
+        
+        # Send complete payload with both devices to preserve both names
+        update_data = {"name": name_payload}
+        
+        _LOGGER.debug("Updating device names for %s: %s", self._serial, name_payload)
         
         # Update the device setting
         success = await self._update_device_setting(update_data)
