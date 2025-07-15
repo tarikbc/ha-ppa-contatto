@@ -188,12 +188,6 @@ def create_github_release(version, zip_filename):
 ## Changes in this Release
 {change_summary}
 
-## Features
-- HACS compatible integration for PPA Contatto
-- Control gates and relays through Home Assistant
-- Real-time status monitoring
-- Device configuration support
-
 ## Installation
 Install via HACS or download the `{zip_filename}` file and extract to your `custom_components` folder.
 """
@@ -284,13 +278,6 @@ def main():
     except Exception as e:
         print(f"\n❌ Error during release: {e}")
         sys.exit(1)
-    
-    # Cleanup
-    cleanup = input("\nRemove local zip file? (Y/n): ").strip().lower()
-    if cleanup != "n":
-        os.remove(zip_filename)
-        print(f"🗑️  Removed {zip_filename}")
-
 
 if __name__ == "__main__":
     main()

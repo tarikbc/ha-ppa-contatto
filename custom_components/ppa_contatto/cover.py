@@ -1,4 +1,4 @@
- """Support for PPA Contatto covers (gates and doors)."""
+"""Support for PPA Contatto covers (gates and doors)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import PPAContattoAPI
-from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 from .config_entities import get_device_display_name
+from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         """Get the current relay duration setting."""
         if self._device_type != DEVICE_TYPE_RELAY:
             return None
-            
+
         try:
             config = await self._api.get_device_configuration(self._serial)
             return config.get("config", {}).get("relayDuration", 1000)  # Default to 1000ms
@@ -222,7 +222,7 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             try:
                 await self._api.control_device(self._serial, self._device_type)
                 _LOGGER.debug("Successfully closed toggle door %s", self._serial)
-                
+
                 if hasattr(self.coordinator, "async_request_refresh_with_delay"):
                     asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
                 else:
@@ -265,14 +265,14 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         try:
             # Wait for the relay duration
             await asyncio.sleep(duration_seconds)
-            
+
             # Set door back to "closed"
             self._momentary_active = False
             self.async_write_ha_state()
-            
+
             # Pull fresh state from API to check actual door status
             await self.coordinator.async_request_refresh()
-            
+
         except asyncio.CancelledError:
             # Task was cancelled, still reset the door
             self._momentary_active = False
@@ -317,13 +317,13 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         elif self._device_type == DEVICE_TYPE_RELAY:
             if latest_status.get("relay"):
                 attrs["latest_door_status"] = latest_status["relay"]
-            
+
             # Add door behavior info based on duration setting
             if self._relay_duration is not None:
                 attrs["door_duration_ms"] = self._relay_duration
                 if self._relay_duration == -1:
                     attrs["behavior"] = "toggle_door"
-                    attrs["mode"] = "on_off_door" 
+                    attrs["mode"] = "on_off_door"
                     attrs["note"] = "Door acts as toggle - stays open/closed when activated"
                 else:
                     attrs["behavior"] = "momentary_door"

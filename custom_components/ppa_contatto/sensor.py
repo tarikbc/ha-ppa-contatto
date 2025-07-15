@@ -19,8 +19,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .api import PPAContattoAPI
-from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 from .config_entities import get_device_display_name
+from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
