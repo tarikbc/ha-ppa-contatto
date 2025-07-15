@@ -13,12 +13,12 @@ from homeassistant.components.number import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
 from .config_entities import get_device_display_name
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ async def async_setup_entry(
     for device in coordinator.data.get("devices", []):
         serial = device.get("serial", "unknown")
         _LOGGER.info("Processing device %s for relay duration: %s", serial, device)
-        
+
         # Add relay duration configuration for any PPA Contatto device
         # (all PPA devices have relay functionality)
         if serial and serial != "unknown":
@@ -60,7 +60,10 @@ async def async_setup_entry(
                 )
             )
         else:
-            _LOGGER.warning("Device %s missing serial number, skipping relay duration entity", device)
+            _LOGGER.warning(
+                "Device %s missing serial number, skipping relay duration entity",
+                device,
+            )
 
     async_add_entities(entities)
 
