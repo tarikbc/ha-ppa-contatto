@@ -35,9 +35,7 @@ class PPAContattoAPIError(Exception):
 class PPAContattoAPI:
     """API client for PPA Contatto."""
 
-    def __init__(
-        self, hass: HomeAssistant, email: str, password: str, config_entry=None
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, email: str, password: str, config_entry=None) -> None:
         """Initialize the API client."""
         self.hass = hass
         self.email = email
@@ -64,18 +62,14 @@ class PPAContattoAPI:
             try:
                 auth_data = {"email": self.email, "password": self.password}
 
-                async with self.session.post(
-                    AUTH_URL, headers=AUTH_HEADERS, data=json.dumps(auth_data)
-                ) as response:
+                async with self.session.post(AUTH_URL, headers=AUTH_HEADERS, data=json.dumps(auth_data)) as response:
                     if response.status != 200:
                         _LOGGER.error(
                             "Authentication failed with status %s: %s",
                             response.status,
                             await response.text(),
                         )
-                        raise PPAContattoAuthError(
-                            f"Authentication failed: {response.status}"
-                        )
+                        raise PPAContattoAuthError(f"Authentication failed: {response.status}")
 
                     data = await response.json()
                     self.access_token = data.get("accessToken")
@@ -104,9 +98,7 @@ class PPAContattoAPI:
             new_data["access_token"] = self.access_token
             new_data["refresh_token"] = self.refresh_token
 
-            self.hass.config_entries.async_update_entry(
-                self.config_entry, data=new_data
-            )
+            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
             _LOGGER.debug("Tokens stored in config entry")
 
     async def _clear_tokens(self) -> None:
@@ -119,9 +111,7 @@ class PPAContattoAPI:
             new_data.pop("access_token", None)
             new_data.pop("refresh_token", None)
 
-            self.hass.config_entries.async_update_entry(
-                self.config_entry, data=new_data
-            )
+            self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
             _LOGGER.debug("Tokens cleared from config entry")
 
     async def _refresh_access_token(self) -> bool:
@@ -134,13 +124,9 @@ class PPAContattoAPI:
             refresh_data = {"refreshToken": self.refresh_token}
 
             # Try to find refresh endpoint (this might need adjustment based on actual API)
-            refresh_url = (
-                "https://auth.ppacontatto.com.br/refresh"  # Assuming this exists
-            )
+            refresh_url = "https://auth.ppacontatto.com.br/refresh"  # Assuming this exists
 
-            async with self.session.post(
-                refresh_url, headers=AUTH_HEADERS, data=json.dumps(refresh_data)
-            ) as response:
+            async with self.session.post(refresh_url, headers=AUTH_HEADERS, data=json.dumps(refresh_data)) as response:
                 if response.status == 200:
                     data = await response.json()
                     self.access_token = data.get("accessToken")
@@ -157,9 +143,7 @@ class PPAContattoAPI:
             _LOGGER.debug("Token refresh error: %s, re-authenticating", err)
             return await self.authenticate()
 
-    async def _make_authenticated_request(
-        self, method: str, url: str, **kwargs
-    ) -> Dict[str, Any]:
+    async def _make_authenticated_request(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
         """Make an authenticated request to the API."""
         if not self.access_token:
             await self.authenticate()
@@ -168,23 +152,17 @@ class PPAContattoAPI:
         headers["Authorization"] = f"Bearer {self.access_token}"
 
         try:
-            async with self.session.request(
-                method, url, headers=headers, **kwargs
-            ) as response:
+            async with self.session.request(method, url, headers=headers, **kwargs) as response:
                 if response.status in (401, 400):
                     # 401 = unauthorized, 400 might also be auth-related
                     error_text = await response.text()
-                    _LOGGER.warning(
-                        "Auth error (status %s): %s", response.status, error_text
-                    )
+                    _LOGGER.warning("Auth error (status %s): %s", response.status, error_text)
 
                     # Try to refresh/re-authenticate
                     if await self._refresh_access_token():
                         headers["Authorization"] = f"Bearer {self.access_token}"
 
-                        async with self.session.request(
-                            method, url, headers=headers, **kwargs
-                        ) as retry_response:
+                        async with self.session.request(method, url, headers=headers, **kwargs) as retry_response:
                             if retry_response.status == 200:
                                 return await retry_response.json()
 
@@ -202,12 +180,8 @@ class PPAContattoAPI:
 
                 elif response.status != 200:
                     error_text = await response.text()
-                    _LOGGER.error(
-                        "API error (status %s): %s", response.status, error_text
-                    )
-                    raise PPAContattoAPIError(
-                        f"API request failed: {response.status} - {error_text}"
-                    )
+                    _LOGGER.error("API error (status %s): %s", response.status, error_text)
+                    raise PPAContattoAPIError(f"API request failed: {response.status} - {error_text}")
 
                 return await response.json()
 
@@ -233,18 +207,14 @@ class PPAContattoAPI:
             # Prepare the JSON payload to specify which hardware to control
             payload = {"hardware": device_type}
 
-            await self._make_authenticated_request(
-                "POST", url, data=json.dumps(payload)
-            )
+            await self._make_authenticated_request("POST", url, data=json.dumps(payload))
             _LOGGER.debug("Successfully controlled device %s (%s)", serial, device_type)
             return True
         except Exception as err:
             _LOGGER.error("Failed to control device %s: %s", serial, err)
             raise
 
-    async def get_device_reports(
-        self, serial: str, page: int = 0, total: int = 10
-    ) -> List[Dict[str, Any]]:
+    async def get_device_reports(self, serial: str, page: int = 0, total: int = 10) -> List[Dict[str, Any]]:
         """Get device reports/history."""
         try:
             url = f"{DEVICE_REPORTS_ENDPOINT}/{serial}/reports"
@@ -289,10 +259,7 @@ class PPAContattoAPI:
                             latest_status["last_user"] = user_name
 
                 # Stop if we have both statuses
-                if (
-                    latest_status["gate"] is not None
-                    and latest_status["relay"] is not None
-                ):
+                if latest_status["gate"] is not None and latest_status["relay"] is not None:
                     break
 
             return latest_status
@@ -316,38 +283,24 @@ class PPAContattoAPI:
             _LOGGER.error("Failed to get configuration for device %s: %s", serial, err)
             raise
 
-    async def update_device_configuration(
-        self, serial: str, config: Dict[str, Any]
-    ) -> bool:
+    async def update_device_configuration(self, serial: str, config: Dict[str, Any]) -> bool:
         """Update device configuration via POST request."""
         try:
             url = f"{DEVICE_CONFIG_ENDPOINT}/{serial}"
             payload = {"config": config}
-            await self._make_authenticated_request(
-                "POST", url, data=json.dumps(payload)
-            )
-            _LOGGER.debug(
-                "Successfully updated configuration for device %s: %s", serial, config
-            )
+            await self._make_authenticated_request("POST", url, data=json.dumps(payload))
+            _LOGGER.debug("Successfully updated configuration for device %s: %s", serial, config)
             return True
         except Exception as err:
-            _LOGGER.error(
-                "Failed to update configuration for device %s: %s", serial, err
-            )
+            _LOGGER.error("Failed to update configuration for device %s: %s", serial, err)
             raise
 
-    async def update_device_settings(
-        self, serial: str, settings: Dict[str, Any]
-    ) -> bool:
+    async def update_device_settings(self, serial: str, settings: Dict[str, Any]) -> bool:
         """Update device settings via PATCH request (legacy method for basic settings)."""
         try:
             url = f"{DEVICE_REPORTS_ENDPOINT}/{serial}"
-            await self._make_authenticated_request(
-                "PATCH", url, data=json.dumps(settings)
-            )
-            _LOGGER.debug(
-                "Successfully updated settings for device %s: %s", serial, settings
-            )
+            await self._make_authenticated_request("PATCH", url, data=json.dumps(settings))
+            _LOGGER.debug("Successfully updated settings for device %s: %s", serial, settings)
             return True
         except Exception as err:
             _LOGGER.error("Failed to update settings for device %s: %s", serial, err)

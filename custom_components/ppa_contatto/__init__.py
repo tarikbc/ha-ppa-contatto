@@ -27,9 +27,7 @@ PLATFORMS: list[Platform] = [
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up PPA Contatto from a config entry."""
-    api = PPAContattoAPI(
-        hass, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD], config_entry=entry
-    )
+    api = PPAContattoAPI(hass, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD], config_entry=entry)
 
     coordinator = PPAContattoDataUpdateCoordinator(hass, api)
 
@@ -83,9 +81,7 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                         device = device.copy()  # Don't modify original
                         device["latest_status"] = latest_status
                     except Exception as err:
-                        _LOGGER.debug(
-                            "Could not get latest status for %s: %s", serial, err
-                        )
+                        _LOGGER.debug("Could not get latest status for %s: %s", serial, err)
                         device["latest_status"] = {
                             "gate": None,
                             "relay": None,

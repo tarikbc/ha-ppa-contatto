@@ -204,9 +204,7 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         """Initialize the visibility switch."""
         super().__init__(coordinator, api, device, unique_id, name)
         self._device_type = device_type
-        self._attr_icon = (
-            "mdi:eye" if device_type == DEVICE_TYPE_GATE else "mdi:eye-outline"
-        )
+        self._attr_icon = "mdi:eye" if device_type == DEVICE_TYPE_GATE else "mdi:eye-outline"
 
     @property
     def is_on(self) -> bool:
@@ -226,9 +224,7 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
 
         # Preserve current name while setting show=True
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {
-            "name": {self._device_type: {"name": current_name, "show": True}}
-        }
+        update_data = {"name": {self._device_type: {"name": current_name, "show": True}}}
         await self._update_device_setting(update_data)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -239,9 +235,7 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
 
         # Preserve current name while setting show=False
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
-        update_data = {
-            "name": {self._device_type: {"name": current_name, "show": False}}
-        }
+        update_data = {"name": {self._device_type: {"name": current_name, "show": False}}}
         await self._update_device_setting(update_data)
 
 
@@ -272,10 +266,6 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
             return
 
         # Preserve current show setting while updating name
-        current_show = (
-            device.get("name", {}).get(self._device_type, {}).get("show", True)
-        )
-        update_data = {
-            "name": {self._device_type: {"name": value, "show": current_show}}
-        }
+        current_show = device.get("name", {}).get(self._device_type, {}).get("show", True)
+        update_data = {"name": {self._device_type: {"name": value, "show": current_show}}}
         await self._update_device_setting(update_data)

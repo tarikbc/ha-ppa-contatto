@@ -104,18 +104,14 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         """Set the relay duration."""
         try:
             # Get current configuration first
-            current_config = await self.coordinator.api.get_device_configuration(
-                self.device["serial"]
-            )
+            current_config = await self.coordinator.api.get_device_configuration(self.device["serial"])
             config_data = current_config.get("config", {})
 
             # Update relay duration
             config_data["relayDuration"] = int(value)
 
             # Update configuration
-            await self.coordinator.api.update_device_configuration(
-                self.device["serial"], config_data
-            )
+            await self.coordinator.api.update_device_configuration(self.device["serial"], config_data)
 
             # Store current config
             self._current_config = config_data
@@ -131,22 +127,16 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
             await self.coordinator.async_request_refresh()
 
         except Exception as err:
-            _LOGGER.error(
-                "Failed to set relay duration for %s: %s", self.device["serial"], err
-            )
+            _LOGGER.error("Failed to set relay duration for %s: %s", self.device["serial"], err)
             raise
 
     async def async_update(self) -> None:
         """Update the current configuration."""
         try:
-            config = await self.coordinator.api.get_device_configuration(
-                self.device["serial"]
-            )
+            config = await self.coordinator.api.get_device_configuration(self.device["serial"])
             self._current_config = config.get("config", {})
         except Exception as err:
-            _LOGGER.debug(
-                "Failed to get configuration for %s: %s", self.device["serial"], err
-            )
+            _LOGGER.debug("Failed to get configuration for %s: %s", self.device["serial"], err)
             self._current_config = {}
 
     @property
