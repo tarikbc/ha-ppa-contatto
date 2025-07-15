@@ -24,7 +24,6 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the PPA Contatto switch platform."""
-    from .config_entities import async_setup_entry as config_setup_entry
 
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     api = hass.data[DOMAIN][config_entry.entry_id]["api"]
@@ -66,7 +65,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
     # Also add configuration switches
-    await config_setup_entry(hass, config_entry, async_add_entities, "switch")
+    from .config_entities import async_setup_config_switches
+    await async_setup_config_switches(hass, config_entry, async_add_entities)
 
 
 class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
