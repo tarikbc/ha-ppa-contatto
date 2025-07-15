@@ -1,6 +1,46 @@
-MIT License
+# The "PPA Documentation Doesn't Exist" License
 
-Copyright (c) 2025 Tarik Caramanico
+Copyright (c) 2025 Tarik Caramanico.
+
+**ATTENTION PPA**: This integration exists because you provide ZERO API documentation.
+
+## 🚫 Usage Restrictions
+
+**The use of this integration is FORBIDDEN to anyone with any professional relationship with PPA, including but not limited to:**
+
+- People who work for PPA
+- Professionals that sell PPA gate systems
+- 3rd party service providers to PPA
+- Sales representatives for PPA products
+
+**This license restriction will be lifted once PPA provides decent documentation of their APIs**, i.e., when their documentation stops being non-existent.
+
+If you want to use this integration and work for/with PPA, go ask them to document their APIs first! 📚
+
+### What We Had To Do:
+
+1. 🕵️ **Intercept mobile app traffic** with mitmproxy
+2. 🔍 **Analyze network requests** in browser dev tools
+3. 💻 **Reverse-engineer JSON payloads** from network captures
+4. 😤 **Waste days** on what should take hours with proper docs
+
+### What You Should Provide:
+
+- **Authentication API docs**
+- **Device control API docs**
+- **Configuration API docs**
+- **Error code documentation**
+- **Developer portal**
+
+**Dear PPA Management**: Your hardware is great, but your developer experience is
+from the stone age. Proper API documentation would enable amazing integrations like this one,
+benefiting both your customers and your business. Please join the 21st century! 🙏
+
+---
+
+## ⚖️ Legal License Section (The Boring But Necessary Part)
+
+**MIT License**
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -1,0 +1,12 @@
+{
+  "domain": "ppa_contatto",
+  "name": "PPA Contatto",
+  "documentation": "https://github.com/tarikbc/ha-ppa-contatto",
+  "issue_tracker": "https://github.com/tarikbc/ha-ppa-contatto/issues",
+  "dependencies": [],
+  "codeowners": ["@tarikbc"],
+  "requirements": ["aiohttp>=3.8.0"],
+  "config_flow": true,
+  "version": "1.2.0",
+  "iot_class": "cloud_polling"
+}
