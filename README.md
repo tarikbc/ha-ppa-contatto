@@ -14,12 +14,12 @@ A custom Home Assistant integration for PPA Contatto gate and relay controllers.
 
 - **Authentication**: Secure login using email and password
 - **Device Discovery**: Automatically discovers all available gates and relays
-- **Switch Control**: Control gates and relays through Home Assistant switches
+- **Cover Control**: Control gates and doors through Home Assistant cover entities (open/close)
 - **Enhanced Status**: Real-time status from device reports for maximum accuracy
 - **Activity History**: Track who performed actions and when
-- **Multiple Entity Types**: Switches for control + sensors for detailed monitoring
+- **Multiple Entity Types**: Covers for control + sensors for monitoring + switches for configuration
 - **Device Information**: View device details like serial number, version, MAC address
-- **Smart Updates**: Combines device polling with activity reports every 30 seconds
+- **Smart Updates**: Combines device polling with activity reports every 3 seconds
 - **Device Configuration**: Configure device settings, names, notifications, and relay behavior
 - **Relay Duration Control**: Set relay duration (momentary button) or switch mode (on/off toggle)
 - **Professional Branding**: Displays official PPA Contatto logo and branding in device info
@@ -67,12 +67,22 @@ This integration supports configuration through the UI only. Manual YAML configu
 
 ## Usage
 
-### Switches
+### Covers (Main Control)
 
-The integration creates switches for each gate and relay that is configured to be shown in your PPA Contatto account:
+The integration creates cover entities for each gate and door that is configured to be shown in your PPA Contatto account:
 
-- **Gate switches**: Control gate opening/closing (e.g., `switch.abc12345_gate`) - Gates may stay open for extended periods
-- **Relay switches**: Momentary button control (e.g., `switch.abc12345_relay`) - Relays activate briefly like a button press
+- **Gate covers**: Control gate opening/closing (e.g., `cover.abc12345_gate`) - Gates may stay open for extended periods
+- **Door covers**: Control doors via relay (e.g., `cover.abc12345_door`) - Behavior depends on relay duration setting:
+  - **Momentary mode** (positive duration): Acts like a button press, shows "opening" during activation
+  - **Toggle mode** (-1 duration): Acts as on/off switch, door stays open/closed until toggled
+
+### Configuration Switches
+
+Additional switches for device configuration:
+
+- **Favorite toggle**: Mark/unmark device as favorite (`switch.abc12345_favorite`)
+- **Notifications toggle**: Enable/disable notifications (`switch.abc12345_notifications`)
+- **Visibility toggles**: Show/hide gate or relay entities (`switch.abc12345_gate_visible`, `switch.abc12345_relay_visible`)
 
 ### Sensors
 
@@ -124,9 +134,9 @@ automation:
         zone: zone.home
         event: enter
     action:
-      - service: switch.turn_on
+      - service: cover.open_cover
         target:
-          entity_id: switch.abc12345_gate
+          entity_id: cover.abc12345_gate
 
 # Send notification when someone opens the gate
 automation:
