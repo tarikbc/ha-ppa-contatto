@@ -24,18 +24,18 @@ async def async_setup_entry(
 ) -> None:
     """Set up the PPA Contatto switch platform."""
     from .config_entities import async_setup_entry as config_setup_entry
-    
+
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     api = hass.data[DOMAIN][config_entry.entry_id]["api"]
-    
+
     entities = []
-    
+
     # Create control switches for each device
     for device in coordinator.data.get("devices", []):
         serial = device.get("serial")
         if not serial:
             continue
-            
+
         # Add gate switch if it's shown
         if device.get("name", {}).get("gate", {}).get("show", False):
             entities.append(
@@ -45,10 +45,10 @@ async def async_setup_entry(
                     device,
                     DEVICE_TYPE_GATE,
                     f"{serial}_gate",
-                    device.get("name", {}).get("gate", {}).get("name", "Gate")
+                    device.get("name", {}).get("gate", {}).get("name", "Gate"),
                 )
             )
-        
+
         # Add relay switch if it's shown
         if device.get("name", {}).get("relay", {}).get("show", False):
             entities.append(
@@ -58,12 +58,12 @@ async def async_setup_entry(
                     device,
                     DEVICE_TYPE_RELAY,
                     f"{serial}_relay",
-                    device.get("name", {}).get("relay", {}).get("name", "Relay")
+                    device.get("name", {}).get("relay", {}).get("name", "Relay"),
                 )
             )
-    
+
     async_add_entities(entities)
-    
+
     # Also add configuration switches
     await config_setup_entry(hass, config_entry, async_add_entities, "switch")
 
@@ -88,7 +88,7 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_unique_id = unique_id
         self._attr_name = name
         self._serial = device.get("serial")
-        
+
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
@@ -99,7 +99,7 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
             serial_number=self._serial,
             configuration_url="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw",
         )
-        
+
         # Set entity description based on device type
         if self._device_type == DEVICE_TYPE_RELAY:
             self._attr_entity_registry_enabled_default = True
@@ -112,10 +112,10 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         device = self._get_device_data()
         if not device:
             return False
-        
+
         # Try to get status from latest reports first (more accurate)
         latest_status = device.get("latest_status", {})
-        
+
         if self._device_type == DEVICE_TYPE_GATE:
             # Gates can stay open for extended periods
             # Check latest status first, then fall back to device status
@@ -124,17 +124,17 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
                 return latest_gate_status == "open"
             # Fallback to device status
             return device.get("status", {}).get("gate") == "open"
-            
+
         elif self._device_type == DEVICE_TYPE_RELAY:
             # Relays are momentary buttons - they're "on" very briefly when activated
             # Most of the time they should show as "off"
-            # Check latest status first, then fall back to device status  
+            # Check latest status first, then fall back to device status
             latest_relay_status = latest_status.get("relay")
             if latest_relay_status is not None:
                 return latest_relay_status == "on"
             # Fallback to device status
             return device.get("status", {}).get("relay") == "on"
-        
+
         return False
 
     @property
@@ -166,22 +166,22 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         try:
             await self._api.control_device(self._serial, self._device_type)
             _LOGGER.debug("Successfully activated %s %s", self._device_type, self._serial)
-            
+
             # Schedule a delayed refresh to allow device status to update
             # Use asyncio.create_task to not block the response
-            if hasattr(self.coordinator, 'async_request_refresh_with_delay'):
+            if hasattr(self.coordinator, "async_request_refresh_with_delay"):
                 asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
             else:
                 # Fallback to immediate refresh
                 await self.coordinator.async_request_refresh()
-            
+
         except Exception as err:
             _LOGGER.error("Failed to turn on %s %s: %s", self._device_type, self._serial, err)
             raise
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off."""
-        # For gates and relays, turning "off" is the same as turning "on" 
+        # For gates and relays, turning "off" is the same as turning "on"
         # (it's a momentary action - like pressing a button)
         await self.async_turn_on(**kwargs)
 
@@ -191,7 +191,7 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         device = self._get_device_data()
         if not device:
             return {}
-            
+
         attrs = {
             "device_id": device.get("deviceId"),
             "mac_address": device.get("macAddress"),
@@ -199,21 +199,21 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
             "role": device.get("role"),
             "favorite": device.get("favorite", False),
         }
-        
+
         # Add status info from device
         status = device.get("status", {})
         if self._device_type == DEVICE_TYPE_GATE:
             attrs["gate_status"] = status.get("gate")
         else:
             attrs["relay_status"] = status.get("relay")
-        
+
         # Add enhanced status from reports
         latest_status = device.get("latest_status", {})
         if latest_status.get("last_action"):
             attrs["last_action"] = latest_status["last_action"]
         if latest_status.get("last_user"):
             attrs["last_user"] = latest_status["last_user"]
-        
+
         # Add latest status for comparison
         if self._device_type == DEVICE_TYPE_GATE and latest_status.get("gate"):
             attrs["latest_gate_status"] = latest_status["gate"]
@@ -223,5 +223,5 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
             # Add note about momentary behavior
             attrs["behavior"] = "momentary_button"
             attrs["note"] = "Relay acts as momentary button - briefly shows 'on' when activated"
-            
-        return attrs 
+
+        return attrs

@@ -40,7 +40,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up PPA Contatto number entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    
+
     entities = []
     for device in coordinator.data:
         if device.get("hardware"):
@@ -52,7 +52,7 @@ async def async_setup_entry(
                     RELAY_DURATION_DESCRIPTION,
                 )
             )
-    
+
     async_add_entities(entities)
 
 
@@ -69,13 +69,13 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self.device = device
-        
+
         self._attr_unique_id = f"{device['serial']}_{description.key}"
         self._attr_name = f"{device.get('name', device['serial'])} {description.name}"
-        
+
         # Add to device configuration category
         self._attr_entity_category = "config"
-        
+
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device["serial"])},
@@ -86,7 +86,7 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
             serial_number=device["serial"],
             configuration_url="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw",
         )
-        
+
         # Track current configuration
         self._current_config: Optional[dict] = None
 
@@ -95,7 +95,7 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         """Return the current relay duration value."""
         if self._current_config and "relayDuration" in self._current_config:
             return float(self._current_config["relayDuration"])
-        
+
         # Default to 1000ms (1 second) for momentary behavior
         return 1000.0
 
@@ -105,29 +105,26 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
             # Get current configuration first
             current_config = await self.coordinator.api.get_device_configuration(self.device["serial"])
             config_data = current_config.get("config", {})
-            
+
             # Update relay duration
             config_data["relayDuration"] = int(value)
-            
+
             # Update configuration
-            await self.coordinator.api.update_device_configuration(
-                self.device["serial"], 
-                config_data
-            )
-            
+            await self.coordinator.api.update_device_configuration(self.device["serial"], config_data)
+
             # Store current config
             self._current_config = config_data
-            
+
             _LOGGER.info(
                 "Updated relay duration for %s to %d ms%s",
                 self.device["serial"],
                 int(value),
-                " (on/off switch mode)" if value == -1 else " (momentary mode)"
+                " (on/off switch mode)" if value == -1 else " (momentary mode)",
             )
-            
+
             # Update coordinator data
             await self.coordinator.async_request_refresh()
-            
+
         except Exception as err:
             _LOGGER.error("Failed to set relay duration for %s: %s", self.device["serial"], err)
             raise
@@ -145,7 +142,7 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes."""
         attrs = super().extra_state_attributes or {}
-        
+
         value = self.native_value
         if value == -1:
             attrs["mode"] = "on_off_switch"
@@ -153,5 +150,5 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         else:
             attrs["mode"] = "momentary"
             attrs["behavior"] = f"Momentary button ({int(value)}ms pulse)"
-        
-        return attrs 
+
+        return attrs

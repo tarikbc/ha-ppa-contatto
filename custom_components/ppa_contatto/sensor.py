@@ -31,63 +31,37 @@ async def async_setup_entry(
     """Set up the PPA Contatto sensor platform."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     api = hass.data[DOMAIN][config_entry.entry_id]["api"]
-    
+
     entities = []
-    
+
     # Create sensors for each device
     for device in coordinator.data.get("devices", []):
         serial = device.get("serial")
         if not serial:
             continue
-        
+
         # Add last action sensor
-        entities.append(
-            PPAContattoLastActionSensor(
-                coordinator,
-                api,
-                device,
-                f"{serial}_last_action",
-                "Last Action"
-            )
-        )
-        
+        entities.append(PPAContattoLastActionSensor(coordinator, api, device, f"{serial}_last_action", "Last Action"))
+
         # Add last user sensor
-        entities.append(
-            PPAContattoLastUserSensor(
-                coordinator,
-                api,
-                device,
-                f"{serial}_last_user",
-                "Last User"
-            )
-        )
-        
+        entities.append(PPAContattoLastUserSensor(coordinator, api, device, f"{serial}_last_user", "Last User"))
+
         # Add gate status sensor if gate is shown
         if device.get("name", {}).get("gate", {}).get("show", False):
             entities.append(
                 PPAContattoStatusSensor(
-                    coordinator,
-                    api,
-                    device,
-                    DEVICE_TYPE_GATE,
-                    f"{serial}_gate_status",
-                    "Gate Status"
+                    coordinator, api, device, DEVICE_TYPE_GATE, f"{serial}_gate_status", "Gate Status"
                 )
             )
-        
+
         # Add relay status sensor if relay is shown
         if device.get("name", {}).get("relay", {}).get("show", False):
             entities.append(
                 PPAContattoStatusSensor(
-                    coordinator,
-                    api,
-                    device,
-                    DEVICE_TYPE_RELAY,
-                    f"{serial}_relay_status",
-                    "Relay Status"
+                    coordinator, api, device, DEVICE_TYPE_RELAY, f"{serial}_relay_status", "Relay Status"
                 )
             )
-    
+
     async_add_entities(entities)
 
 
@@ -109,7 +83,7 @@ class PPAContattoBaseSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = unique_id
         self._attr_name = name
         self._serial = device.get("serial")
-        
+
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
@@ -146,17 +120,17 @@ class PPAContattoLastActionSensor(PPAContattoBaseSensor):
         device = self._get_device_data()
         if not device:
             return None
-        
+
         latest_status = device.get("latest_status", {})
         last_action = latest_status.get("last_action")
-        
+
         if last_action:
             try:
                 # Parse ISO timestamp
                 return dt_util.parse_datetime(last_action)
             except (ValueError, TypeError):
                 _LOGGER.warning("Could not parse timestamp: %s", last_action)
-        
+
         return None
 
     @property
@@ -165,7 +139,7 @@ class PPAContattoLastActionSensor(PPAContattoBaseSensor):
         device = self._get_device_data()
         if not device:
             return {}
-        
+
         latest_status = device.get("latest_status", {})
         return {
             "last_user": latest_status.get("last_user"),
@@ -188,10 +162,10 @@ class PPAContattoLastUserSensor(PPAContattoBaseSensor):
         device = self._get_device_data()
         if not device:
             return None
-        
+
         latest_status = device.get("latest_status", {})
         last_user = latest_status.get("last_user")
-        
+
         return last_user if last_user else "System"
 
     @property
@@ -200,15 +174,15 @@ class PPAContattoLastUserSensor(PPAContattoBaseSensor):
         device = self._get_device_data()
         if not device:
             return {}
-        
+
         latest_status = device.get("latest_status", {})
         attrs = {
             "device_serial": self._serial,
         }
-        
+
         if latest_status.get("last_action"):
             attrs["last_action"] = latest_status["last_action"]
-        
+
         return attrs
 
 
@@ -220,7 +194,7 @@ class PPAContattoStatusSensor(PPAContattoBaseSensor):
         super().__init__(coordinator, api, device, unique_id, name)
         self._device_type = device_type
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        
+
         if device_type == DEVICE_TYPE_GATE:
             self._attr_icon = "mdi:gate"
         else:
@@ -232,10 +206,10 @@ class PPAContattoStatusSensor(PPAContattoBaseSensor):
         device = self._get_device_data()
         if not device:
             return None
-        
+
         # Try latest status first, then fallback to device status
         latest_status = device.get("latest_status", {})
-        
+
         if self._device_type == DEVICE_TYPE_GATE:
             status = latest_status.get("gate")
             if status is None:
@@ -253,26 +227,26 @@ class PPAContattoStatusSensor(PPAContattoBaseSensor):
         device = self._get_device_data()
         if not device:
             return {}
-        
+
         attrs = {
             "device_serial": self._serial,
             "device_type": self._device_type,
         }
-        
+
         # Add both latest and device status for comparison
         latest_status = device.get("latest_status", {})
         device_status = device.get("status", {})
-        
+
         if self._device_type == DEVICE_TYPE_GATE:
             attrs["device_status"] = device_status.get("gate")
             attrs["latest_status"] = latest_status.get("gate")
         else:
             attrs["device_status"] = device_status.get("relay")
             attrs["latest_status"] = latest_status.get("relay")
-        
+
         if latest_status.get("last_action"):
             attrs["last_updated"] = latest_status["last_action"]
         if latest_status.get("last_user"):
             attrs["last_user"] = latest_status["last_user"]
-        
-        return attrs 
+
+        return attrs
