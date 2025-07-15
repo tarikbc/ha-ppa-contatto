@@ -189,6 +189,52 @@ class PPAContattoAPI:
             _LOGGER.error("Network error during API request: %s", err)
             raise PPAContattoAPIError(f"Network error: {err}") from err
 
+    async def _make_authenticated_request_text(self, method: str, url: str, **kwargs) -> str:
+        """Make an authenticated request that returns text (not JSON)."""
+        if not self.access_token:
+            await self.authenticate()
+
+        headers = DEFAULT_HEADERS.copy()
+        headers["Authorization"] = f"Bearer {self.access_token}"
+
+        try:
+            async with self.session.request(method, url, headers=headers, **kwargs) as response:
+                if response.status in (401, 400):
+                    # 401 = unauthorized, 400 might also be auth-related
+                    error_text = await response.text()
+                    _LOGGER.warning("Auth error (status %s): %s", response.status, error_text)
+
+                    # Try to refresh/re-authenticate
+                    if await self._refresh_access_token():
+                        headers["Authorization"] = f"Bearer {self.access_token}"
+
+                        async with self.session.request(method, url, headers=headers, **kwargs) as retry_response:
+                            if retry_response.status == 200:
+                                return await retry_response.text()
+
+                            error_text = await retry_response.text()
+                            _LOGGER.error(
+                                "Retry failed (status %s): %s",
+                                retry_response.status,
+                                error_text,
+                            )
+                            raise PPAContattoAPIError(
+                                f"API request failed after auth retry: {retry_response.status} - {error_text}"
+                            )
+                    else:
+                        raise PPAContattoAPIError("Authentication failed during retry")
+
+                elif response.status != 200:
+                    error_text = await response.text()
+                    _LOGGER.error("API error (status %s): %s", response.status, error_text)
+                    raise PPAContattoAPIError(f"API request failed: {response.status} - {error_text}")
+
+                return await response.text()
+
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Network error during API request: %s", err)
+            raise PPAContattoAPIError(f"Network error: {err}") from err
+
     async def get_devices(self) -> List[Dict[str, Any]]:
         """Get all devices from the API."""
         try:
@@ -207,7 +253,8 @@ class PPAContattoAPI:
             # Prepare the JSON payload to specify which hardware to control
             payload = {"hardware": device_type}
 
-            await self._make_authenticated_request("POST", url, data=json.dumps(payload))
+            # Use text response version since this endpoint returns text/plain
+            await self._make_authenticated_request_text("POST", url, data=json.dumps(payload))
             _LOGGER.debug("Successfully controlled device %s (%s)", serial, device_type)
             return True
         except Exception as err:

@@ -173,9 +173,6 @@ class PPAContattoConfigBase(CoordinatorEntity):
         """Update device setting via API."""
         try:
             success = await self._api.update_device_settings(self._serial, data)
-            if success:
-                # Request refresh to get updated data
-                await self.coordinator.async_request_refresh()
             return success
         except Exception as err:
             _LOGGER.error("Failed to update device setting: %s", err)
@@ -206,11 +203,15 @@ class PPAContattoConfigSwitch(PPAContattoConfigBase, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the setting on."""
-        await self._update_device_setting({self._setting_key: True})
+        success = await self._update_device_setting({self._setting_key: True})
+        if success:
+            await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the setting off."""
-        await self._update_device_setting({self._setting_key: False})
+        success = await self._update_device_setting({self._setting_key: False})
+        if success:
+            await self.coordinator.async_request_refresh()
 
 
 class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
@@ -241,7 +242,9 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         # Preserve current name while setting show=True
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
         update_data = {"name": {self._device_type: {"name": current_name, "show": True}}}
-        await self._update_device_setting(update_data)
+        success = await self._update_device_setting(update_data)
+        if success:
+            await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Hide the device."""
@@ -252,7 +255,9 @@ class PPAContattoVisibilitySwitch(PPAContattoConfigBase, SwitchEntity):
         # Preserve current name while setting show=False
         current_name = device.get("name", {}).get(self._device_type, {}).get("name", "")
         update_data = {"name": {self._device_type: {"name": current_name, "show": False}}}
-        await self._update_device_setting(update_data)
+        success = await self._update_device_setting(update_data)
+        if success:
+            await self.coordinator.async_request_refresh()
 
 
 class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
@@ -284,4 +289,43 @@ class PPAContattoNameText(PPAContattoConfigBase, TextEntity):
         # Preserve current show setting while updating name
         current_show = device.get("name", {}).get(self._device_type, {}).get("show", True)
         update_data = {"name": {self._device_type: {"name": value, "show": current_show}}}
-        await self._update_device_setting(update_data)
+        
+        # Update the device setting
+        success = await self._update_device_setting(update_data)
+        
+        if success:
+            # After successful name update, fetch the latest device data to ensure 
+            # our storage reflects the current state from the API
+            await self._refresh_device_names()
+
+    async def _refresh_device_names(self) -> None:
+        """Fetch latest device data and update coordinator storage."""
+        try:
+            # Get fresh device list from API
+            fresh_devices = await self._api.get_devices()
+            
+            # Update coordinator data with fresh device information
+            if hasattr(self.coordinator, 'data') and 'devices' in self.coordinator.data:
+                # Find and update our specific device in the coordinator data
+                for i, device in enumerate(self.coordinator.data['devices']):
+                    if device.get('serial') == self._serial:
+                        # Find the corresponding fresh device data
+                        for fresh_device in fresh_devices:
+                            if fresh_device.get('serial') == self._serial:
+                                # Preserve latest_status if it exists
+                                if 'latest_status' in device:
+                                    fresh_device['latest_status'] = device['latest_status']
+                                
+                                # Update with fresh data
+                                self.coordinator.data['devices'][i] = fresh_device
+                                _LOGGER.debug("Refreshed device data for %s with latest names", self._serial)
+                                break
+                        break
+                
+                # Notify all entities that the data has been updated
+                self.coordinator.async_set_updated_data(self.coordinator.data)
+                
+        except Exception as err:
+            _LOGGER.warning("Failed to refresh device names for %s: %s", self._serial, err)
+            # Fallback to regular coordinator refresh
+            await self.coordinator.async_request_refresh()

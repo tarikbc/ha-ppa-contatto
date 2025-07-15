@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -104,8 +105,8 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         # Set entity description based on device type
         if self._device_type == DEVICE_TYPE_RELAY:
             self._attr_entity_registry_enabled_default = True
-            # For relays, add description to clarify momentary behavior
-            self._relay_is_momentary = True
+            # Track relay duration for behavior (will be fetched on update)
+            self._relay_duration: Optional[int] = None
 
     @property
     def is_on(self) -> bool:
@@ -151,8 +152,13 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         """Return the icon to use in the frontend."""
         if self._device_type == DEVICE_TYPE_GATE:
             return "mdi:gate" if self.is_on else "mdi:gate-and"
-        else:  # relay (momentary button)
-            return "mdi:gesture-tap-button" if self.is_on else "mdi:radiobox-blank"
+        else:  # relay - icon depends on duration mode
+            if self._relay_duration == -1:
+                # Toggle switch mode
+                return "mdi:electric-switch" if self.is_on else "mdi:electric-switch-closed"
+            else:
+                # Momentary button mode
+                return "mdi:gesture-tap-button" if self.is_on else "mdi:radiobox-blank"
 
     def _get_device_data(self) -> Optional[Dict[str, Any]]:
         """Get current device data from coordinator."""
@@ -161,6 +167,11 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
             if device.get("serial") == self._serial:
                 return device
         return None
+
+    async def async_update(self) -> None:
+        """Update relay duration for relays."""
+        if self._device_type == DEVICE_TYPE_RELAY:
+            self._relay_duration = await self._get_relay_duration()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
@@ -185,6 +196,18 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         # For gates and relays, turning "off" is the same as turning "on"
         # (it's a momentary action - like pressing a button)
         await self.async_turn_on(**kwargs)
+
+    async def _get_relay_duration(self) -> Optional[int]:
+        """Get the current relay duration setting."""
+        if self._device_type != DEVICE_TYPE_RELAY:
+            return None
+            
+        try:
+            config = await self._api.get_device_configuration(self._serial)
+            return config.get("config", {}).get("relayDuration", 1000)  # Default to 1000ms
+        except Exception as err:
+            _LOGGER.debug("Failed to get relay duration for %s: %s", self._serial, err)
+            return 1000  # Default to momentary behavior
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -221,8 +244,20 @@ class PPAContattoSwitch(CoordinatorEntity, SwitchEntity):
         elif self._device_type == DEVICE_TYPE_RELAY:
             if latest_status.get("relay"):
                 attrs["latest_relay_status"] = latest_status["relay"]
-            # Add note about momentary behavior
-            attrs["behavior"] = "momentary_button"
-            attrs["note"] = "Relay acts as momentary button - briefly shows 'on' when activated"
+            
+            # Add relay behavior info based on duration setting
+            if self._relay_duration is not None:
+                attrs["relay_duration_ms"] = self._relay_duration
+                if self._relay_duration == -1:
+                    attrs["behavior"] = "toggle_switch"
+                    attrs["mode"] = "on_off_switch" 
+                    attrs["note"] = "Relay acts as toggle switch - stays on/off when activated"
+                else:
+                    attrs["behavior"] = "momentary_button"
+                    attrs["mode"] = "momentary"
+                    attrs["note"] = f"Relay acts as momentary button - {self._relay_duration}ms pulse when activated"
+            else:
+                attrs["behavior"] = "unknown"
+                attrs["note"] = "Configure relay duration in device settings"
 
         return attrs
