@@ -42,4 +42,8 @@ AUTH_HEADERS: Final = {
 }
 
 # Update intervals
-UPDATE_INTERVAL: Final = 3  # Poll every 3 seconds for faster name/state updates
+UPDATE_INTERVAL: Final = 15  # Poll every 15 seconds to reduce API load
+
+# Timeout settings
+API_TIMEOUT: Final = 30  # 30 seconds timeout for API requests
+CONNECTION_TIMEOUT: Final = 10  # 10 seconds timeout for connection
