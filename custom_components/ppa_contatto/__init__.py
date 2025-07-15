@@ -1,4 +1,5 @@
 """The PPA Contatto integration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,12 +17,19 @@ from .const import DOMAIN, UPDATE_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SWITCH, Platform.SENSOR, Platform.TEXT, Platform.NUMBER]
+PLATFORMS: list[Platform] = [
+    Platform.SWITCH,
+    Platform.SENSOR,
+    Platform.TEXT,
+    Platform.NUMBER,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up PPA Contatto from a config entry."""
-    api = PPAContattoAPI(hass, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD], config_entry=entry)
+    api = PPAContattoAPI(
+        hass, entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD], config_entry=entry
+    )
 
     coordinator = PPAContattoDataUpdateCoordinator(hass, api)
 
@@ -75,8 +83,15 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                         device = device.copy()  # Don't modify original
                         device["latest_status"] = latest_status
                     except Exception as err:
-                        _LOGGER.debug("Could not get latest status for %s: %s", serial, err)
-                        device["latest_status"] = {"gate": None, "relay": None, "last_action": None, "last_user": None}
+                        _LOGGER.debug(
+                            "Could not get latest status for %s: %s", serial, err
+                        )
+                        device["latest_status"] = {
+                            "gate": None,
+                            "relay": None,
+                            "last_action": None,
+                            "last_user": None,
+                        }
 
                 enhanced_devices.append(device)
 

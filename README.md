@@ -2,13 +2,13 @@
 
 [![GitHub Release][releases-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
-[![License][license-shield]](LICENSE)
-[![hacs][hacsbadge]][hacs]
 [![Project Maintenance][maintenance-shield]][user_profile]
 
 <img src="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw" alt="PPA Contatto App" width="200" align="right">
 
 A custom Home Assistant integration for PPA Contatto gate and relay controllers.
+
+> **⚠️ Installation Note**: This integration is not yet available in the official Home Assistant Community Store (HACS) or the official Home Assistant integration list. For now, it must be installed manually. We're working on getting it officially listed!
 
 ## Features
 
@@ -26,7 +26,21 @@ A custom Home Assistant integration for PPA Contatto gate and relay controllers.
 
 ## Installation
 
-### HACS Installation (Recommended)
+### Manual Installation (Required for now)
+
+Since this integration is not yet available through HACS or the official Home Assistant integration list, you'll need to install it manually:
+
+1. Download the latest release from [GitHub Releases](https://github.com/tarikbc/ha-ppa-contatto/releases)
+2. Extract the `custom_components/ppa_contatto` folder to your Home Assistant `custom_components` directory
+   - Your path should look like: `config/custom_components/ppa_contatto/`
+3. Restart Home Assistant
+4. Go to **Settings** → **Devices & Services** → **Add Integration**
+5. Search for "PPA Contatto" and select it
+6. Enter your PPA Contatto email and password
+
+### Future HACS Installation (Coming Soon)
+
+Once this integration is accepted into HACS, you'll be able to install it through:
 
 1. Ensure [HACS](https://hacs.xyz/) is installed
 2. Go to **HACS** → **Integrations**
@@ -35,15 +49,6 @@ A custom Home Assistant integration for PPA Contatto gate and relay controllers.
 5. Restart Home Assistant
 6. Go to **Settings** → **Devices & Services** → **Add Integration**
 7. Search for "PPA Contatto" and configure with your credentials
-
-### Manual Installation
-
-1. Download the latest release from [GitHub Releases](https://github.com/tarikbc/ha-ppa-contatto/releases)
-2. Extract the `custom_components/ppa_contatto` folder to your Home Assistant `custom_components` directory
-3. Restart Home Assistant
-4. Go to **Settings** → **Devices & Services** → **Add Integration**
-5. Search for "PPA Contatto" and select it
-6. Enter your PPA Contatto email and password
 
 ## Configuration
 
@@ -262,18 +267,6 @@ cd ha-ppa-contatto
 - **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/tarikbc/ha-ppa-contatto/issues)
 - **Discussions**: Ask questions in [GitHub Discussions](https://github.com/tarikbc/ha-ppa-contatto/discussions)
 
-## Reverse Engineering Story 🔍
-
-This integration was built entirely through reverse engineering, as **PPA Contatto provides zero API documentation**. The development process involved:
-
-- 🕵️ **Traffic Interception**: Using mitmproxy to capture mobile app requests
-- 🔍 **Network Analysis**: Browser dev tools to understand API calls
-- 🧪 **Endpoint Discovery**: Trial and error to find working endpoints
-- 💻 **Payload Reverse Engineering**: Figuring out JSON structures from mobile app traffic
-- 😤 **Pure Determination**: Refusing to give up when nothing was documented
-
-For the full story of our frustration with undocumented APIs, see the [LICENSE](LICENSE) file.
-
 ## Disclaimer
 
 This integration is not officially supported by PPA Contatto. Use at your own risk.
@@ -284,8 +277,6 @@ This integration is not officially supported by PPA Contatto. Use at your own ri
 
 [commits-shield]: https://img.shields.io/github/commit-activity/y/tarikbc/ha-ppa-contatto.svg?style=for-the-badge
 [commits]: https://github.com/tarikbc/ha-ppa-contatto/commits/main
-[hacs]: https://github.com/hacs/integration
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
 [license-shield]: https://img.shields.io/github/license/tarikbc/ha-ppa-contatto.svg?style=for-the-badge
 [maintenance-shield]: https://img.shields.io/badge/maintainer-Tarik%20Caramanico%20%40tarikbc-blue.svg?style=for-the-badge
 [releases-shield]: https://img.shields.io/github/release/tarikbc/ha-ppa-contatto.svg?style=for-the-badge
