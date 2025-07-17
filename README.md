@@ -4,43 +4,32 @@
 [![GitHub Activity][commits-shield]][commits]
 [![Project Maintenance][maintenance-shield]][user_profile]
 
-<img src="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw" alt="PPA Contatto App" width="200" align="right">
+<img src="https://brands.home-assistant.io/ppa_contatto/icon.png" alt="PPA Contatto" width="200" align="right">
 
 A custom Home Assistant integration for PPA Contatto gate and relay controllers.
 
-> **⚠️ Installation Note**: This integration is not yet available in the official Home Assistant Community Store (HACS) or the official Home Assistant integration list. For now, it must be installed manually. We're working on getting it officially listed!
+> **✅ Installation Note**: This integration is now available in the official Home Assistant Community Store (HACS)! You can install it directly through HACS or manually if you prefer.
 
 ## Features
 
-- **Authentication**: Secure login using email and password
+- **Authentication**: Secure login using email and password with automatic token refresh
+- **Real-time Updates**: WebSocket connection for instant gate/relay state changes (no polling delay!)
+- **Smart Token Management**: Automatic JWT token refresh with 500 error handling for expired tokens
 - **Device Discovery**: Automatically discovers all available gates and relays
 - **Cover Control**: Control gates and doors through Home Assistant cover entities (open/close)
 - **Enhanced Status**: Real-time status from device reports for maximum accuracy
 - **Activity History**: Track who performed actions and when
 - **Multiple Entity Types**: Covers for control + sensors for monitoring + switches for configuration
 - **Device Information**: View device details like serial number, version, MAC address
-- **Smart Updates**: Combines device polling with activity reports every 3 seconds
 - **Device Configuration**: Configure device settings, names, notifications, and relay behavior
 - **Relay Duration Control**: Set relay duration (momentary button) or switch mode (on/off toggle)
 - **Professional Branding**: Displays official PPA Contatto logo and branding in device info
 
 ## Installation
 
-### Manual Installation (Required for now)
+### HACS Installation (Recommended)
 
-Since this integration is not yet available through HACS or the official Home Assistant integration list, you'll need to install it manually:
-
-1. Download the latest release from [GitHub Releases](https://github.com/tarikbc/ha-ppa-contatto/releases)
-2. Extract the `custom_components/ppa_contatto` folder to your Home Assistant `custom_components` directory
-   - Your path should look like: `config/custom_components/ppa_contatto/`
-3. Restart Home Assistant
-4. Go to **Settings** → **Devices & Services** → **Add Integration**
-5. Search for "PPA Contatto" and select it
-6. Enter your PPA Contatto email and password
-
-### Future HACS Installation (Coming Soon)
-
-Once this integration is accepted into HACS, you'll be able to install it through:
+This integration is now available in the official Home Assistant Community Store (HACS):
 
 1. Ensure [HACS](https://hacs.xyz/) is installed
 2. Go to **HACS** → **Integrations**
@@ -49,6 +38,18 @@ Once this integration is accepted into HACS, you'll be able to install it throug
 5. Restart Home Assistant
 6. Go to **Settings** → **Devices & Services** → **Add Integration**
 7. Search for "PPA Contatto" and configure with your credentials
+
+### Manual Installation (Alternative)
+
+If you prefer to install manually:
+
+1. Download the latest release from [GitHub Releases](https://github.com/tarikbc/ha-ppa-contatto/releases)
+2. Extract the `custom_components/ppa_contatto` folder to your Home Assistant `custom_components` directory
+   - Your path should look like: `config/custom_components/ppa_contatto/`
+3. Restart Home Assistant
+4. Go to **Settings** → **Devices & Services** → **Add Integration**
+5. Search for "PPA Contatto" and select it
+6. Enter your PPA Contatto email and password
 
 ## Configuration
 
@@ -174,16 +175,47 @@ automation:
 The integration uses the following PPA Contatto API endpoints:
 
 - **Authentication**: `https://auth.ppacontatto.com.br/login/password`
+- **Token Refresh**: `https://auth.ppacontatto.com.br/token/renew`
 - **Device List**: `https://api.ppacontatto.com.br/devices`
 - **Device Control**: `https://api.ppacontatto.com.br/device/hardware/{serial}`
 - **Device Reports**: `https://api.ppacontatto.com.br/device/{serial}/reports`
+- **Real-time Updates**: `wss://realtime.ppacontatto.com.br/socket.io/` (WebSocket)
+
+## WebSocket Protocol Details
+
+The integration uses Socket.IO v4 protocol for real-time communication:
+
+- **Connection URL**: `wss://realtime.ppacontatto.com.br/socket.io/?auth=Bearer%20TOKEN`
+- **Transport**: Direct WebSocket connection with Socket.IO protocol parsing
+- **Event Name**: `device/status` - listens for device status updates
+- **Data Format**:
+  ```json
+  {
+    "serial": "ABC12345",
+    "status": {
+      "gate": "closed", // or "open"
+      "relay": "off" // or "on"
+    }
+  }
+  ```
+- **Ping Interval**: 25 seconds with 20-second timeout
+- **Handshake**: After initial connection ("0"), sends namespace request ("40")
+- **Keep-Alive**: Sends pong ("3") after every message once namespace is connected
+- **Reconnection**: Resilient auto-reconnection strategy:
+  - **Initial retries**: 5 attempts with 5-second delays
+  - **Exponential backoff**: After 5 failures, delays increase (5s → 10s → 20s → 40s → max 5min)
+  - **Never gives up**: Continues reconnecting indefinitely with smart backoff
+  - **Counter reset**: Retry counter resets after 5 minutes of stable connection
+
+When a gate or door state changes, the WebSocket immediately sends a `device/status` event with the new state, allowing Home Assistant entities to update instantly without polling delays.
 
 ## Troubleshooting
 
 ### Authentication Issues
 
 - **Invalid Credentials**: Double-check your email and password
-- **Network Issues**: Ensure Home Assistant can reach the PPA Contatto servers
+- **Token Expiration**: The integration automatically handles JWT token expiration - no manual intervention needed
+- **Network Issues**: Ensure Home Assistant can reach the PPA Contatto servers (both API and WebSocket endpoints)
 - **Account Issues**: Verify your account is active and has device access
 
 ### Device Not Appearing
@@ -215,7 +247,7 @@ logger:
 
 - Python 3.9+
 - Home Assistant 2023.1+
-- aiohttp
+- aiohttp>=3.8.0 (includes WebSocket support)
 
 ### Setup Development Environment
 
@@ -234,6 +266,11 @@ curl -X POST 'https://auth.ppacontatto.com.br/login/password' \
   -H 'Content-Type: application/json' \
   -d '{"email":"your-email@example.com","password":"your-password"}'
 
+# Test token refresh (replace YOUR_REFRESH_TOKEN)
+curl -X POST 'https://auth.ppacontatto.com.br/token/renew' \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken":"YOUR_REFRESH_TOKEN"}'
+
 # Test device list (replace YOUR_TOKEN)
 curl 'https://api.ppacontatto.com.br/devices' \
   -H 'Authorization: Bearer YOUR_TOKEN'
@@ -241,6 +278,16 @@ curl 'https://api.ppacontatto.com.br/devices' \
 # Test device reports (replace YOUR_TOKEN and SERIAL)
 curl 'https://api.ppacontatto.com.br/device/SERIAL/reports?page=0&total=10' \
   -H 'Authorization: Bearer YOUR_TOKEN'
+
+# Test WebSocket connection (replace YOUR_TOKEN)
+# Note: For manual testing with curl, you need the full Socket.IO URL:
+curl 'wss://realtime.ppacontatto.com.br/socket.io/?auth=Bearer%20YOUR_TOKEN&EIO=4&transport=websocket' \
+  -H 'Host: realtime.ppacontatto.com.br:443' \
+  -H 'Upgrade: websocket' \
+  -H 'Connection: Upgrade'
+
+# The integration uses direct WebSocket connection and manually parses Socket.IO protocol
+# Connection format: wss://realtime.ppacontatto.com.br/socket.io/?auth=Bearer+TOKEN&EIO=4&transport=websocket
 ```
 
 ## Contributing

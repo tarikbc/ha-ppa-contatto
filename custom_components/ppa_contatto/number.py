@@ -13,7 +13,7 @@ from homeassistant.components.number import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -86,7 +86,7 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
         self._attr_name = f"{device.get('name', device['serial'])} {description.name}"
 
         # Add to device configuration category
-        self._attr_entity_category = "config"
+        self._attr_entity_category = EntityCategory.CONFIG
 
         # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
@@ -96,7 +96,7 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
             model="Gate Controller",
             sw_version=device.get("version"),
             serial_number=device["serial"],
-            configuration_url="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw",
+            configuration_url="https://brands.home-assistant.io/ppa_contatto/icon.png",
         )
 
         # Track current configuration

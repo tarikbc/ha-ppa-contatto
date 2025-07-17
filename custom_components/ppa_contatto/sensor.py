@@ -104,7 +104,7 @@ class PPAContattoBaseSensor(CoordinatorEntity, SensorEntity):
             model="Gate Controller",
             sw_version=device.get("version"),
             serial_number=self._serial,
-            configuration_url="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw",
+            configuration_url="https://brands.home-assistant.io/ppa_contatto/icon.png",
         )
 
     def _get_device_data(self) -> Optional[Dict[str, Any]]:
