@@ -8,11 +8,18 @@ DOMAIN: Final = "ppa_contatto"
 
 # API Configuration
 AUTH_URL: Final = "https://auth.ppacontatto.com.br/login/password"
+REFRESH_TOKEN_URL: Final = "https://auth.ppacontatto.com.br/token/renew"
 API_BASE_URL: Final = "https://api.ppacontatto.com.br"
 DEVICES_ENDPOINT: Final = f"{API_BASE_URL}/devices"
 DEVICE_CONTROL_ENDPOINT: Final = f"{API_BASE_URL}/device/hardware"
 DEVICE_REPORTS_ENDPOINT: Final = f"{API_BASE_URL}/device"
 DEVICE_CONFIG_ENDPOINT: Final = f"{API_BASE_URL}/device/configuration"
+
+# WebSocket Configuration
+WEBSOCKET_URL: Final = "wss://realtime.ppacontatto.com.br/socket.io/"
+WEBSOCKET_RECONNECT_DELAY: Final = 5  # seconds
+WEBSOCKET_MAX_RETRIES: Final = 5  # Max retries per session before backing off
+WEBSOCKET_BACKOFF_RESET_TIME: Final = 300  # Reset retry counter after 5 minutes of stability
 
 # Config Keys
 CONF_EMAIL: Final = "email"

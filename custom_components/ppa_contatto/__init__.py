@@ -50,6 +50,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        # Clean up WebSocket connection
+        entry_data = hass.data[DOMAIN].get(entry.entry_id)
+        if entry_data and "api" in entry_data:
+            api = entry_data["api"]
+            await api.stop_websocket()
+
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
@@ -61,17 +67,80 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, api: PPAContattoAPI) -> None:
         """Initialize."""
         self.api = api
+        self._websocket_started = False
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=UPDATE_INTERVAL),  # Fallback polling interval
         )
+
+        # Set up WebSocket callback for real-time updates
+        self.api.set_device_update_callback(self._handle_device_update)
+
+    def _handle_device_update(self, device_serial: str, update_data: Dict[str, Any]) -> None:
+        """Handle real-time device updates from WebSocket."""
+        try:
+            # Update the device data in our coordinator's data
+            if self.data and "devices" in self.data:
+                devices = self.data["devices"]
+                for device in devices:
+                    if device.get("serial") == device_serial:
+                        # Track if anything actually changed
+                        data_changed = False
+
+                        # Update device with new status data from WebSocket
+                        latest_status = device.setdefault("latest_status", {})
+                        device_status = device.setdefault("status", {})
+
+                        # Check and update gate status if changed
+                        if "gate" in update_data and update_data["gate"] is not None:
+                            current_gate = latest_status.get("gate")
+                            new_gate = update_data["gate"]
+                            if current_gate != new_gate:
+                                latest_status["gate"] = new_gate
+                                device_status["gate"] = new_gate
+                                data_changed = True
+
+                        # Check and update relay status if changed
+                        if "relay" in update_data and update_data["relay"] is not None:
+                            current_relay = latest_status.get("relay")
+                            new_relay = update_data["relay"]
+                            if current_relay != new_relay:
+                                latest_status["relay"] = new_relay
+                                device_status["relay"] = new_relay
+                                data_changed = True
+
+                        # Only trigger coordinator update if data actually changed
+                        if data_changed:
+                            self.async_set_updated_data(self.data)
+                        break
+
+        except Exception as err:
+            _LOGGER.error("Error handling WebSocket device update: %s", err)
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Update data via library."""
         try:
             _LOGGER.debug("Starting data update from PPA Contatto API")
+
+            # Start WebSocket connection if not already started
+            if not self._websocket_started:
+                websocket_success = await self.api.start_websocket()
+                if websocket_success:
+                    _LOGGER.info("WebSocket connection established - switching to real-time updates")
+                    self._websocket_started = True
+                    # Increase polling interval since WebSocket provides real-time updates
+                    self.update_interval = timedelta(minutes=5)  # Just for health checks
+                else:
+                    _LOGGER.warning("Failed to establish initial WebSocket connection - will retry automatically")
+            else:
+                # Ensure WebSocket is still connected (this will auto-reconnect if needed)
+                websocket_reconnected = await self.api.ensure_websocket_connected()
+                if not websocket_reconnected and self.api._websocket_connected:
+                    # WebSocket is having issues, log but don't fail the update
+                    _LOGGER.debug("WebSocket reconnection in progress - using polling fallback")
+
             devices = await self.api.get_devices()
 
             # Enhance device data with latest status from reports

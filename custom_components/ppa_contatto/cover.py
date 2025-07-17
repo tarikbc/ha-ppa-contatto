@@ -1,4 +1,11 @@
-"""Support for PPA Contatto covers (gates and doors)."""
+"""Support for PPA Contatto covers (gates and doors).
+
+This module uses direct WebSocket connection for real-time updates instead of HTTP polling.
+The Socket.IO handshake sequence: 0{handshake} → 40 → 40{namespace} → 2/3 ping/pong + events.
+When a gate/door is controlled, the state updates come through 'device/status' events over
+WebSocket in Socket.IO format: 42["device/status",{"serial":"PO21CE63","status":{"gate":"open","relay":"off"}}].
+This eliminates the need for multiple delayed HTTP requests to check status changes.
+"""
 
 from __future__ import annotations
 
@@ -100,7 +107,6 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         self._relay_duration: Optional[int] = None
         self._momentary_active: bool = False
         self._momentary_task: Optional[asyncio.Task] = None
-        self._gate_refresh_task: Optional[asyncio.Task] = None
 
         # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
@@ -110,7 +116,7 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             model="Gate Controller",
             sw_version=device.get("version"),
             serial_number=self._serial,
-            configuration_url="https://play-lh.googleusercontent.com/qDtSOerKV_rVZ2ZMi_-pFe7jccoGVH0aHDbykUAQeE15_UoWa0Ej1dKt3FfaQCh1PoI=w480-h960-rw",
+            configuration_url="https://brands.home-assistant.io/ppa_contatto/icon.png",
         )
 
         # Cover supports open and close
@@ -174,12 +180,14 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         # For momentary doors, show as opening when momentary is active
         if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration != -1:
             return self._momentary_active
+
+        # For gates, rely on WebSocket for state - no intermediate states
         return False
 
     @property
     def is_closing(self) -> bool:
         """Return if the cover is closing."""
-        # PPA devices don't distinguish between opening/closing
+        # For gates, rely on WebSocket for state - no intermediate states
         return False
 
     @property
@@ -226,22 +234,9 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration != -1:
                 await self._activate_momentary_door()
             else:
-                # Normal behavior for gates and toggle doors
+                # Simple behavior for gates and toggle doors - always trigger
                 await self._api.control_device(self._serial, self._device_type)
-                _LOGGER.debug("Successfully opened %s %s", self._device_type, self._serial)
-
-                # For gates, schedule multiple refreshes to catch state changes
-                if self._device_type == DEVICE_TYPE_GATE:
-                    # Cancel any existing gate refresh task
-                    if self._gate_refresh_task and not self._gate_refresh_task.done():
-                        self._gate_refresh_task.cancel()
-                    self._gate_refresh_task = asyncio.create_task(self._refresh_gate_status())
-                else:
-                    # For toggle relays, single refresh is sufficient
-                    if hasattr(self.coordinator, "async_request_refresh_with_delay"):
-                        asyncio.create_task(self.coordinator.async_request_refresh_with_delay(1.5))
-                    else:
-                        await self.coordinator.async_request_refresh()
+                _LOGGER.debug("Successfully triggered %s %s", self._device_type, self._serial)
 
         except Exception as err:
             _LOGGER.error("Failed to open %s %s: %s", self._device_type, self._serial, err)
@@ -250,21 +245,15 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
         if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration == -1:
-            # Toggle door in switch mode - turning "off" should actually close it
-            try:
-                await self._api.control_device(self._serial, self._device_type)
-                _LOGGER.debug("Successfully closed toggle door %s", self._serial)
-
-                # Use multiple refreshes for better state tracking
-                if self._gate_refresh_task and not self._gate_refresh_task.done():
-                    self._gate_refresh_task.cancel()
-                self._gate_refresh_task = asyncio.create_task(self._refresh_gate_status())
-            except Exception as err:
-                _LOGGER.error("Failed to close %s %s: %s", self._device_type, self._serial, err)
-                raise
+            # Toggle door in switch mode
+            await self._api.control_device(self._serial, self._device_type)
+            _LOGGER.debug("Successfully triggered toggle door %s", self._serial)
+        elif self._device_type == DEVICE_TYPE_GATE:
+            # Simple behavior for gates - always trigger (same as open)
+            await self._api.control_device(self._serial, self._device_type)
+            _LOGGER.debug("Successfully triggered gate %s", self._serial)
         else:
-            # For gates and momentary doors, closing is the same as opening
-            # (it's a momentary action - like pressing a button)
+            # For momentary doors, closing is the same as opening
             await self.async_open_cover(**kwargs)
 
     async def _activate_momentary_door(self) -> None:
@@ -302,8 +291,10 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             self._momentary_active = False
             self.async_write_ha_state()
 
-            # Pull fresh state from API to check actual door status
-            await self.coordinator.async_request_refresh()
+            # WebSocket will handle real-time updates, only do fallback refresh if WebSocket is not connected
+            if not self._api._websocket_connected:
+                _LOGGER.debug("WebSocket not connected, doing fallback refresh for momentary door %s", self._serial)
+                await self.coordinator.async_request_refresh()
 
         except asyncio.CancelledError:
             # Task was cancelled, still reset the door
@@ -313,23 +304,6 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             _LOGGER.error("Error in momentary door reset for %s: %s", self._serial, err)
             self._momentary_active = False
             self.async_write_ha_state()
-
-    async def _refresh_gate_status(self) -> None:
-        """Refresh gate status multiple times to catch state changes."""
-        try:
-            # Gates can take time to physically open/close and API to update
-            # Schedule multiple refreshes to ensure we catch the state change
-            refresh_delays = [1.0, 3.0, 6.0, 10.0]  # Staggered refreshes
-
-            for delay in refresh_delays:
-                await asyncio.sleep(delay)
-                await self.coordinator.async_request_refresh()
-                _LOGGER.debug("Refreshed gate status for %s after %s seconds", self._serial, delay)
-
-        except asyncio.CancelledError:
-            _LOGGER.debug("Gate status refresh cancelled for %s", self._serial)
-        except Exception as err:
-            _LOGGER.warning("Error refreshing gate status for %s: %s", self._serial, err)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -390,12 +364,5 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             self._momentary_task.cancel()
             try:
                 await self._momentary_task
-            except asyncio.CancelledError:
-                pass
-
-        if self._gate_refresh_task and not self._gate_refresh_task.done():
-            self._gate_refresh_task.cancel()
-            try:
-                await self._gate_refresh_task
             except asyncio.CancelledError:
                 pass
