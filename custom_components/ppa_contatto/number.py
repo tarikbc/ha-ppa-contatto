@@ -96,7 +96,6 @@ class PPAContattoRelayDurationNumber(CoordinatorEntity, NumberEntity):
             model="Gate Controller",
             sw_version=device.get("version"),
             serial_number=device["serial"],
-            configuration_url="https://brands.home-assistant.io/ppa_contatto/icon.png",
         )
 
         # Track current configuration

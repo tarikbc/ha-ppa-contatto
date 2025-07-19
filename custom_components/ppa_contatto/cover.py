@@ -116,7 +116,6 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
             model="Gate Controller",
             sw_version=device.get("version"),
             serial_number=self._serial,
-            configuration_url="https://brands.home-assistant.io/ppa_contatto/icon.png",
         )
 
         # Cover supports open and close

@@ -180,7 +180,6 @@ class PPAContattoConfigBase(CoordinatorEntity):
             model="Gate Controller",
             sw_version=device.get("version"),
             serial_number=self._serial,
-            configuration_url="https://brands.home-assistant.io/ppa_contatto/icon.png",
         )
 
     def _get_device_data(self) -> Optional[Dict[str, Any]]:
