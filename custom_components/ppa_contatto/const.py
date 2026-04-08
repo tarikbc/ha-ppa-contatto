@@ -20,6 +20,7 @@ WEBSOCKET_URL: Final = "wss://realtime.ppacontatto.com.br/socket.io/"
 WEBSOCKET_RECONNECT_DELAY: Final = 5  # seconds
 WEBSOCKET_MAX_RETRIES: Final = 5  # Max retries per session before backing off
 WEBSOCKET_BACKOFF_RESET_TIME: Final = 300  # Reset retry counter after 5 minutes of stability
+WEBSOCKET_HEALTH_CHECK_INTERVAL: Final = 10  # Watchdog checks WS health every 10 seconds
 
 # Config Keys
 CONF_EMAIL: Final = "email"

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
-from typing import Any, Dict
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import PPAContattoAPI, PPAContattoAPIError, PPAContattoAuthError
-from .const import DOMAIN, UPDATE_INTERVAL
+from .const import DOMAIN, UPDATE_INTERVAL, WEBSOCKET_HEALTH_CHECK_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +36,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Fetch initial data
     await coordinator.async_config_entry_first_refresh()
 
+    # Start the WebSocket health watchdog — runs independently of the data
+    # update coordinator so a dropped WebSocket is detected within seconds
+    # instead of having to wait for the next (potentially 5-minute) poll.
+    coordinator.start_websocket_watchdog()
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
@@ -50,11 +55,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        # Clean up WebSocket connection
         entry_data = hass.data[DOMAIN].get(entry.entry_id)
-        if entry_data and "api" in entry_data:
-            api = entry_data["api"]
-            await api.stop_websocket()
+        if entry_data:
+            # Stop the WebSocket watchdog first so it doesn't race to
+            # reconnect while we're tearing the connection down.
+            coordinator: Optional["PPAContattoDataUpdateCoordinator"] = entry_data.get("coordinator")
+            if coordinator is not None:
+                await coordinator.stop_websocket_watchdog()
+
+            # Clean up WebSocket connection
+            if "api" in entry_data:
+                api = entry_data["api"]
+                await api.stop_websocket()
 
         hass.data[DOMAIN].pop(entry.entry_id)
 
@@ -68,6 +80,7 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
         """Initialize."""
         self.api = api
         self._websocket_started = False
+        self._websocket_watchdog_task: Optional[asyncio.Task] = None
         super().__init__(
             hass,
             _LOGGER,
@@ -77,6 +90,58 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
 
         # Set up WebSocket callback for real-time updates
         self.api.set_device_update_callback(self._handle_device_update)
+
+    def start_websocket_watchdog(self) -> None:
+        """Start the independent WebSocket health watchdog task.
+
+        The watchdog runs on a short interval (``WEBSOCKET_HEALTH_CHECK_INTERVAL``)
+        and is responsible for ensuring the WebSocket stays connected. Previously
+        the only thing driving reconnection was ``_async_update_data`` itself,
+        which runs every ``update_interval`` — and because that interval is
+        bumped to 5 minutes once the WebSocket reports success, a silent drop
+        left the integration blind for up to 5 minutes. The watchdog decouples
+        reconnect cadence from data polling so drops are healed in seconds.
+        """
+        if self._websocket_watchdog_task and not self._websocket_watchdog_task.done():
+            return
+        self._websocket_watchdog_task = self.hass.loop.create_task(self._websocket_watchdog())
+
+    async def stop_websocket_watchdog(self) -> None:
+        """Cancel the WebSocket watchdog task if running."""
+        task = self._websocket_watchdog_task
+        self._websocket_watchdog_task = None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Error awaiting cancelled WebSocket watchdog: %s", err)
+
+    async def _websocket_watchdog(self) -> None:
+        """Periodically verify the WebSocket is alive and reconnect if not."""
+        _LOGGER.debug("WebSocket watchdog started (interval=%ss)", WEBSOCKET_HEALTH_CHECK_INTERVAL)
+        try:
+            while True:
+                try:
+                    # If we've never successfully started the WebSocket yet,
+                    # try to do so now. Otherwise make sure it's still healthy
+                    # and reconnect if it isn't.
+                    if not self._websocket_started:
+                        if await self.api.start_websocket():
+                            _LOGGER.info("WebSocket connection established via watchdog")
+                            self._websocket_started = True
+                    else:
+                        if not self.api._websocket_connected:  # noqa: SLF001
+                            _LOGGER.info("WebSocket watchdog detected disconnect — reconnecting")
+                            await self.api.ensure_websocket_connected()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("WebSocket watchdog iteration error: %s", err)
+                await asyncio.sleep(WEBSOCKET_HEALTH_CHECK_INTERVAL)
+        except asyncio.CancelledError:
+            _LOGGER.debug("WebSocket watchdog cancelled")
+            raise
 
     def _handle_device_update(self, device_serial: str, update_data: Dict[str, Any]) -> None:
         """Handle real-time device updates from WebSocket."""
@@ -111,8 +176,23 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                                 device_status["relay"] = new_relay
                                 data_changed = True
 
-                        # Only trigger coordinator update if data actually changed
+                        # If the WebSocket reported an actual state change we
+                        # also advance ``last_action`` (and mark the user as
+                        # the WebSocket push itself). The upstream event does
+                        # not carry a timestamp for the action, so we stamp it
+                        # with ``now()`` — which is correct to within the
+                        # WebSocket delivery latency (~sub-second). Without
+                        # this the ``sensor.last_action`` / ``sensor.last_user``
+                        # entities would remain stale until the next (5-minute)
+                        # polling cycle, making them useless as automation
+                        # triggers even when the WebSocket is healthy.
                         if data_changed:
+                            latest_status["last_action"] = datetime.now(timezone.utc).isoformat()
+                            # Only claim authorship if we don't already know
+                            # who acted; a subsequent poll will replace this
+                            # with the real username from the reports API.
+                            if not latest_status.get("last_user"):
+                                latest_status["last_user"] = "WebSocket"
                             self.async_set_updated_data(self.data)
                         break
 
