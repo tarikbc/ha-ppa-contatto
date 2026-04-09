@@ -378,7 +378,6 @@ This integration is not officially supported by PPA Contatto. Use at your own ri
 
 [commits-shield]: https://img.shields.io/github/commit-activity/y/tarikbc/ha-ppa-contatto.svg?style=for-the-badge
 [commits]: https://github.com/tarikbc/ha-ppa-contatto/commits/main
-[license-shield]: https://img.shields.io/github/license/tarikbc/ha-ppa-contatto.svg?style=for-the-badge
 [maintenance-shield]: https://img.shields.io/badge/maintainer-Tarik%20Caramanico%20%40tarikbc-blue.svg?style=for-the-badge
 [releases-shield]: https://img.shields.io/github/release/tarikbc/ha-ppa-contatto.svg?style=for-the-badge
 [releases]: https://github.com/tarikbc/ha-ppa-contatto/releases
