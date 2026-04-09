@@ -191,14 +191,25 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
 
     @property
     def available(self) -> bool:
-        """Return if entity is available."""
-        # Check if coordinator has valid data (API is responding)
-        if not self.coordinator.last_update_success:
-            return False
+        """Return if entity is available.
 
+        We deliberately do NOT tie availability to
+        ``coordinator.last_update_success``. A transient cloud hiccup
+        (failed poll, temporary REST 5xx, WebSocket reconnecting) would
+        otherwise flap every cover entity to ``unavailable`` and back,
+        which is actively harmful: any state trigger of the form
+        ``from: closed`` fires on ``closed → unavailable`` and can
+        arm/disarm dependent automations spuriously. This was the root
+        cause of the 03:39 BRT alarm disarm on 2026-04-09.
+
+        The device's own ``online`` flag is a much better signal for
+        "is this gate actually reachable", and it's only updated by
+        real poll results — not by transient network errors.
+        """
         device = self._get_device_data()
         if not device:
-            return False
+            # No data at all yet — fall back to HA's default.
+            return self.coordinator.last_update_success
         return device.get("online", False) and device.get("authorized", False)
 
     def _get_device_data(self) -> Optional[Dict[str, Any]]:

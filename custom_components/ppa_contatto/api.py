@@ -26,8 +26,10 @@ from .const import (
     DEVICES_ENDPOINT,
     REFRESH_TOKEN_URL,
     WEBSOCKET_BACKOFF_RESET_TIME,
+    WEBSOCKET_CLIENT_PING_INTERVAL,
     WEBSOCKET_MAX_RETRIES,
     WEBSOCKET_RECONNECT_DELAY,
+    WEBSOCKET_STALE_TIMEOUT,
     WEBSOCKET_URL,
 )
 
@@ -67,6 +69,12 @@ class PPAContattoAPI:
         self._device_update_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_listener_task: Optional[asyncio.Task] = None
+        self._websocket_keepalive_task: Optional[asyncio.Task] = None
+        # Monotonic timestamp of the last frame received from the server.
+        # Used by the coordinator-level watchdog to detect zombie WebSockets
+        # (TCP silently dead so aiohttp never fires a close event). Reset on
+        # every successful connect and updated on every inbound frame.
+        self._websocket_last_message_at: float = 0.0
 
         # Load stored tokens if available
         if config_entry and hasattr(config_entry, "data"):
@@ -237,9 +245,15 @@ class PPAContattoAPI:
             self._websocket_reconnect_count = 0
             self._websocket_last_connect_time = time.time()
             self._websocket_last_retry_reset = time.time()
+            self._websocket_last_message_at = time.monotonic()
 
             # Start message listener task
             self._websocket_listener_task = asyncio.create_task(self._websocket_message_listener())
+            # Start client-side keepalive task. Socket.IO servers ping clients
+            # on their own, but sending our own pings gives us an active probe
+            # for half-open TCP (send() errors out immediately if the socket
+            # is dead on our end) and keeps NAT entries warm.
+            self._websocket_keepalive_task = asyncio.create_task(self._websocket_client_keepalive())
 
             return True
 
@@ -253,6 +267,9 @@ class PPAContattoAPI:
         """Listen for WebSocket messages and parse Socket.IO protocol."""
         try:
             async for msg in self._websocket:
+                # Any frame — text, ping, pong — proves the TCP connection
+                # is alive. Stamp the watchdog timer before dispatching.
+                self._websocket_last_message_at = time.monotonic()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     await self._handle_websocket_message(msg.data)
                 elif msg.type == aiohttp.WSMsgType.ERROR:
@@ -330,10 +347,70 @@ class PPAContattoAPI:
         except Exception as err:
             _LOGGER.error("Error processing device/status event: %s", err)
 
+    async def _websocket_client_keepalive(self) -> None:
+        """Proactively send Socket.IO ping frames from the client side.
+
+        The PPA Socket.IO server sends pings on its own, but relying solely
+        on inbound traffic means a half-open TCP connection (NAT entry
+        expired on a middlebox, cloud side silently dropped us) looks fine
+        until the server next tries to push something. By sending our own
+        "2" ping frame every WEBSOCKET_CLIENT_PING_INTERVAL seconds we get:
+          1. An active liveness probe — if the TCP state is bad on our end,
+             send() raises immediately and we tear the connection down.
+          2. NAT keepalive so middleboxes don't silently drop the entry.
+        """
+        try:
+            while self._websocket_connected and self._websocket and not self._websocket.closed:
+                await asyncio.sleep(WEBSOCKET_CLIENT_PING_INTERVAL)
+                if not (self._websocket and not self._websocket.closed):
+                    break
+                try:
+                    # Socket.IO ping is "2"; we already reply "3" (pong) to
+                    # server pings elsewhere. Only send once the namespace
+                    # is connected so we don't interfere with the handshake.
+                    if self._websocket_namespace_connected:
+                        await self._websocket.send_str("2")
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("WebSocket client ping failed (socket is likely dead): %s", err)
+                    # Mark as disconnected so the coordinator watchdog
+                    # notices on its next tick and reconnects.
+                    self._websocket_connected = False
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("WebSocket keepalive task exited unexpectedly: %s", err)
+
+    def websocket_is_stale(self) -> bool:
+        """Return True if no frames have arrived within WEBSOCKET_STALE_TIMEOUT.
+
+        Called by the coordinator watchdog. If this returns True while the
+        API still thinks it's connected, we have a zombie WebSocket and
+        need to force a reconnect.
+        """
+        if not self._websocket_connected:
+            return False
+        if self._websocket_last_message_at == 0.0:
+            return False
+        return (time.monotonic() - self._websocket_last_message_at) > WEBSOCKET_STALE_TIMEOUT
+
+    async def force_websocket_reconnect(self, reason: str) -> bool:
+        """Tear down any existing WebSocket and reconnect from scratch."""
+        _LOGGER.warning("Forcing WebSocket reconnect: %s", reason)
+        await self._cleanup_websocket()
+        return await self.start_websocket()
+
     async def _cleanup_websocket(self) -> None:
         """Clean up WebSocket connection and resources."""
         self._websocket_connected = False
         self._websocket_namespace_connected = False
+
+        if self._websocket_keepalive_task and not self._websocket_keepalive_task.done():
+            self._websocket_keepalive_task.cancel()
+            try:
+                await self._websocket_keepalive_task
+            except asyncio.CancelledError:
+                pass
 
         if self._websocket_listener_task and not self._websocket_listener_task.done():
             self._websocket_listener_task.cancel()
@@ -351,6 +428,8 @@ class PPAContattoAPI:
         self._websocket = None
         self._websocket_session = None
         self._websocket_listener_task = None
+        self._websocket_keepalive_task = None
+        self._websocket_last_message_at = 0.0
 
     async def stop_websocket(self) -> None:
         """Stop WebSocket connection."""

@@ -21,6 +21,16 @@ WEBSOCKET_RECONNECT_DELAY: Final = 5  # seconds
 WEBSOCKET_MAX_RETRIES: Final = 5  # Max retries per session before backing off
 WEBSOCKET_BACKOFF_RESET_TIME: Final = 300  # Reset retry counter after 5 minutes of stability
 WEBSOCKET_HEALTH_CHECK_INTERVAL: Final = 10  # Watchdog checks WS health every 10 seconds
+# If we haven't received ANY frame from the server for this many seconds we
+# consider the WebSocket a zombie (TCP silently dead) and force-reconnect.
+# The PPA Socket.IO server pings us roughly every 25s, so 90s is ~3 missed
+# pings — comfortably beyond normal jitter but well under the old failure
+# mode where a dead WS stayed "connected" indefinitely.
+WEBSOCKET_STALE_TIMEOUT: Final = 90
+# How often we proactively send a Socket.IO ping ("2") from our side. Helps
+# keep NAT/firewall state warm on cloud-to-home paths and gives us an active
+# probe for half-open TCP connections.
+WEBSOCKET_CLIENT_PING_INTERVAL: Final = 25
 
 # Config Keys
 CONF_EMAIL: Final = "email"

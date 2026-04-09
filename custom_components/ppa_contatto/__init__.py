@@ -133,7 +133,17 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                             _LOGGER.info("WebSocket connection established via watchdog")
                             self._websocket_started = True
                     else:
-                        if not self.api._websocket_connected:  # noqa: SLF001
+                        # Zombie-WS detection: the aiohttp listener only
+                        # flips ``_websocket_connected`` to False when it
+                        # actually receives a close/error frame. A silently
+                        # dead TCP connection (half-open socket, NAT
+                        # timeout, cloud flake) leaves the flag stuck at
+                        # True forever. ``websocket_is_stale()`` catches
+                        # that by looking at how long it's been since we
+                        # received ANY frame from the server.
+                        if self.api.websocket_is_stale():
+                            await self.api.force_websocket_reconnect("no frames received within stale-timeout window")
+                        elif not self.api._websocket_connected:  # noqa: SLF001
                             _LOGGER.info("WebSocket watchdog detected disconnect — reconnecting")
                             await self.api.ensure_websocket_connected()
                 except Exception as err:  # noqa: BLE001
