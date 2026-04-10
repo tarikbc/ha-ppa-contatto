@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -81,6 +82,16 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
         self.api = api
         self._websocket_started = False
         self._websocket_watchdog_task: Optional[asyncio.Task] = None
+        # Lock that serializes ALL WebSocket connect/reconnect/cleanup calls.
+        # Both the watchdog and the poll loop previously raced to reconnect
+        # the WS simultaneously, creating duplicate connections and orphaned
+        # listener tasks. With this lock, only one path can touch the WS at
+        # a time.
+        self._ws_reconnect_lock = asyncio.Lock()
+        # Monotonic timestamp of the last successful ``_async_update_data``
+        # return. The watchdog uses this to detect a dead coordinator poll
+        # loop (e.g. stuck HTTP request, HA backoff growing too large).
+        self._last_successful_poll: float = 0.0
         super().__init__(
             hass,
             _LOGGER,
@@ -92,16 +103,7 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
         self.api.set_device_update_callback(self._handle_device_update)
 
     def start_websocket_watchdog(self) -> None:
-        """Start the independent WebSocket health watchdog task.
-
-        The watchdog runs on a short interval (``WEBSOCKET_HEALTH_CHECK_INTERVAL``)
-        and is responsible for ensuring the WebSocket stays connected. Previously
-        the only thing driving reconnection was ``_async_update_data`` itself,
-        which runs every ``update_interval`` — and because that interval is
-        bumped to 5 minutes once the WebSocket reports success, a silent drop
-        left the integration blind for up to 5 minutes. The watchdog decouples
-        reconnect cadence from data polling so drops are healed in seconds.
-        """
+        """Start the independent WebSocket health watchdog task."""
         if self._websocket_watchdog_task and not self._websocket_watchdog_task.done():
             return
         self._websocket_watchdog_task = self.hass.loop.create_task(self._websocket_watchdog())
@@ -119,35 +121,75 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Error awaiting cancelled WebSocket watchdog: %s", err)
 
+    async def _safe_ws_reconnect(self, reason: str) -> bool:
+        """Reconnect the WebSocket under the shared lock.
+
+        Returns True if the WS ended up connected (either because we
+        successfully reconnected, or because a concurrent call already
+        fixed it while we waited for the lock).
+        """
+        async with self._ws_reconnect_lock:
+            # Re-check after acquiring the lock — another coroutine may
+            # have fixed the WS while we were waiting.
+            if self.api._websocket_connected and not self.api.websocket_is_stale():  # noqa: SLF001
+                _LOGGER.debug("WS already healthy after acquiring lock (reason was: %s)", reason)
+                return True
+            _LOGGER.warning("WebSocket reconnecting: %s", reason)
+            return await self.api.force_websocket_reconnect(reason)
+
+    async def _safe_ws_ensure(self) -> bool:
+        """Ensure WS is connected, under the shared lock."""
+        async with self._ws_reconnect_lock:
+            if self.api._websocket_connected:  # noqa: SLF001
+                return True
+            _LOGGER.warning("WebSocket disconnected — reconnecting via watchdog")
+            return await self.api.ensure_websocket_connected()
+
     async def _websocket_watchdog(self) -> None:
         """Periodically verify the WebSocket is alive and reconnect if not."""
-        _LOGGER.debug("WebSocket watchdog started (interval=%ss)", WEBSOCKET_HEALTH_CHECK_INTERVAL)
+        _LOGGER.info("WebSocket watchdog started (interval=%ss)", WEBSOCKET_HEALTH_CHECK_INTERVAL)
         try:
             while True:
                 try:
-                    # If we've never successfully started the WebSocket yet,
-                    # try to do so now. Otherwise make sure it's still healthy
-                    # and reconnect if it isn't.
                     if not self._websocket_started:
-                        if await self.api.start_websocket():
-                            _LOGGER.info("WebSocket connection established via watchdog")
-                            self._websocket_started = True
+                        async with self._ws_reconnect_lock:
+                            if await self.api.start_websocket():
+                                _LOGGER.info("WebSocket connection established via watchdog")
+                                self._websocket_started = True
                     else:
-                        # Zombie-WS detection: the aiohttp listener only
-                        # flips ``_websocket_connected`` to False when it
-                        # actually receives a close/error frame. A silently
-                        # dead TCP connection (half-open socket, NAT
-                        # timeout, cloud flake) leaves the flag stuck at
-                        # True forever. ``websocket_is_stale()`` catches
-                        # that by looking at how long it's been since we
-                        # received ANY frame from the server.
                         if self.api.websocket_is_stale():
-                            await self.api.force_websocket_reconnect("no frames received within stale-timeout window")
+                            ok = await self._safe_ws_reconnect("no frames received within stale-timeout window")
+                            if ok:
+                                _LOGGER.info("WebSocket recovered after stale detection")
+                            else:
+                                _LOGGER.warning("WebSocket reconnect FAILED after stale detection")
                         elif not self.api._websocket_connected:  # noqa: SLF001
-                            _LOGGER.info("WebSocket watchdog detected disconnect — reconnecting")
-                            await self.api.ensure_websocket_connected()
+                            ok = await self._safe_ws_ensure()
+                            if ok:
+                                _LOGGER.info("WebSocket recovered after disconnect")
+                            else:
+                                _LOGGER.warning("WebSocket reconnect FAILED after disconnect")
+
+                    # --- Poll-loop health check ---
+                    # If the coordinator poll hasn't succeeded for more than
+                    # 3x the current update_interval, something is stuck.
+                    # Force a refresh to break out of any HA backoff spiral.
+                    if self._last_successful_poll > 0:
+                        poll_age = time.monotonic() - self._last_successful_poll
+                        expected = (self.update_interval or timedelta(seconds=UPDATE_INTERVAL)).total_seconds()
+                        if poll_age > expected * 3:
+                            _LOGGER.warning(
+                                "Coordinator poll appears stuck (last success %.0fs ago, expected every %.0fs) "
+                                "— forcing refresh",
+                                poll_age,
+                                expected,
+                            )
+                            # Reset interval to short polling so we recover fast.
+                            self.update_interval = timedelta(seconds=UPDATE_INTERVAL)
+                            await self.async_request_refresh()
+
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.debug("WebSocket watchdog iteration error: %s", err)
+                    _LOGGER.warning("WebSocket watchdog iteration error: %s", err)
                 await asyncio.sleep(WEBSOCKET_HEALTH_CHECK_INTERVAL)
         except asyncio.CancelledError:
             _LOGGER.debug("WebSocket watchdog cancelled")
@@ -186,21 +228,8 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                                 device_status["relay"] = new_relay
                                 data_changed = True
 
-                        # If the WebSocket reported an actual state change we
-                        # also advance ``last_action`` (and mark the user as
-                        # the WebSocket push itself). The upstream event does
-                        # not carry a timestamp for the action, so we stamp it
-                        # with ``now()`` — which is correct to within the
-                        # WebSocket delivery latency (~sub-second). Without
-                        # this the ``sensor.last_action`` / ``sensor.last_user``
-                        # entities would remain stale until the next (5-minute)
-                        # polling cycle, making them useless as automation
-                        # triggers even when the WebSocket is healthy.
                         if data_changed:
                             latest_status["last_action"] = datetime.now(timezone.utc).isoformat()
-                            # Only claim authorship if we don't already know
-                            # who acted; a subsequent poll will replace this
-                            # with the real username from the reports API.
                             if not latest_status.get("last_user"):
                                 latest_status["last_user"] = "WebSocket"
                             self.async_set_updated_data(self.data)
@@ -210,26 +239,33 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Error handling WebSocket device update: %s", err)
 
     async def _async_update_data(self) -> Dict[str, Any]:
-        """Update data via library."""
+        """Update data via library.
+
+        IMPORTANT: WebSocket management is handled EXCLUSIVELY by the
+        watchdog task. This method only polls the REST API for device
+        data. Mixing WS reconnection into the poll loop caused race
+        conditions (Bug A, v1.5.5) and prevented the poll interval
+        from resetting when the WS died (Bug B).
+        """
         try:
             _LOGGER.debug("Starting data update from PPA Contatto API")
 
-            # Start WebSocket connection if not already started
-            if not self._websocket_started:
-                websocket_success = await self.api.start_websocket()
-                if websocket_success:
-                    _LOGGER.info("WebSocket connection established - switching to real-time updates")
-                    self._websocket_started = True
-                    # Increase polling interval since WebSocket provides real-time updates
-                    self.update_interval = timedelta(minutes=5)  # Just for health checks
-                else:
-                    _LOGGER.warning("Failed to establish initial WebSocket connection - will retry automatically")
-            else:
-                # Ensure WebSocket is still connected (this will auto-reconnect if needed)
-                websocket_reconnected = await self.api.ensure_websocket_connected()
-                if not websocket_reconnected and self.api._websocket_connected:
-                    # WebSocket is having issues, log but don't fail the update
-                    _LOGGER.debug("WebSocket reconnection in progress - using polling fallback")
+            # If the WS was once connected but isn't any more, reset the
+            # poll interval to fast-polling so entities stay fresh while
+            # the watchdog works on reconnecting.
+            if self._websocket_started and not self.api._websocket_connected:  # noqa: SLF001
+                if self.update_interval and self.update_interval > timedelta(seconds=UPDATE_INTERVAL):
+                    _LOGGER.warning(
+                        "WebSocket is down — resetting poll interval from %s to %ss",
+                        self.update_interval,
+                        UPDATE_INTERVAL,
+                    )
+                    self.update_interval = timedelta(seconds=UPDATE_INTERVAL)
+            elif self._websocket_started and self.api._websocket_connected:  # noqa: SLF001
+                # WS is healthy — keep the long interval.
+                if self.update_interval and self.update_interval < timedelta(minutes=5):
+                    _LOGGER.info("WebSocket healthy — extending poll interval to 5 min")
+                    self.update_interval = timedelta(minutes=5)
 
             devices = await self.api.get_devices()
 
@@ -254,6 +290,7 @@ class PPAContattoDataUpdateCoordinator(DataUpdateCoordinator):
                 enhanced_devices.append(device)
 
             _LOGGER.debug("Successfully updated data for %d devices", len(enhanced_devices))
+            self._last_successful_poll = time.monotonic()
             return {"devices": enhanced_devices}
 
         except asyncio.TimeoutError as err:
