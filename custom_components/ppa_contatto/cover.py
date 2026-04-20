@@ -19,7 +19,7 @@ from homeassistant.components.cover import (
     CoverEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -29,6 +29,8 @@ from .config_entities import get_device_display_name
 from .const import DEVICE_TYPE_GATE, DEVICE_TYPE_RELAY, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+GATE_OPTIMISTIC_TIMEOUT = 60.0
 
 
 async def async_setup_entry(
@@ -108,6 +110,11 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
         self._momentary_active: bool = False
         self._momentary_task: Optional[asyncio.Task] = None
 
+        # Optimistic state for gates — flips is_opening/is_closing immediately
+        # on command so automations don't wait on WS/poll confirmation.
+        self._gate_optimistic_state: Optional[str] = None
+        self._gate_optimistic_task: Optional[asyncio.Task] = None
+
         # Set device info with dynamic name
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
@@ -176,17 +183,21 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
     @property
     def is_opening(self) -> bool:
         """Return if the cover is opening."""
+        if self._device_type == DEVICE_TYPE_GATE:
+            return self._gate_optimistic_state == "opening"
+
         # For momentary doors, show as opening when momentary is active
         if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration != -1:
             return self._momentary_active
 
-        # For gates, rely on WebSocket for state - no intermediate states
         return False
 
     @property
     def is_closing(self) -> bool:
         """Return if the cover is closing."""
-        # For gates, rely on WebSocket for state - no intermediate states
+        if self._device_type == DEVICE_TYPE_GATE:
+            return self._gate_optimistic_state == "closing"
+
         return False
 
     @property
@@ -240,11 +251,13 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
         try:
-            # For momentary doors, implement button behavior
-            if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration != -1:
+            if self._device_type == DEVICE_TYPE_GATE:
+                await self._trigger_gate("opening")
+            elif self._device_type == DEVICE_TYPE_RELAY and self._relay_duration != -1:
+                # For momentary doors, implement button behavior
                 await self._activate_momentary_door()
             else:
-                # Simple behavior for gates and toggle doors - always trigger
+                # Toggle-mode doors - always trigger
                 await self._api.control_device(self._serial, self._device_type)
                 _LOGGER.debug("Successfully triggered %s %s", self._device_type, self._serial)
 
@@ -254,17 +267,47 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
-        if self._device_type == DEVICE_TYPE_RELAY and self._relay_duration == -1:
+        if self._device_type == DEVICE_TYPE_GATE:
+            await self._trigger_gate("closing")
+        elif self._device_type == DEVICE_TYPE_RELAY and self._relay_duration == -1:
             # Toggle door in switch mode
             await self._api.control_device(self._serial, self._device_type)
             _LOGGER.debug("Successfully triggered toggle door %s", self._serial)
-        elif self._device_type == DEVICE_TYPE_GATE:
-            # Simple behavior for gates - always trigger (same as open)
-            await self._api.control_device(self._serial, self._device_type)
-            _LOGGER.debug("Successfully triggered gate %s", self._serial)
         else:
             # For momentary doors, closing is the same as opening
             await self.async_open_cover(**kwargs)
+
+    async def _trigger_gate(self, optimistic: str) -> None:
+        """Trigger the gate and set optimistic state ('opening' or 'closing')."""
+        if self._gate_optimistic_task and not self._gate_optimistic_task.done():
+            self._gate_optimistic_task.cancel()
+
+        self._gate_optimistic_state = optimistic
+        self.async_write_ha_state()
+
+        try:
+            await self._api.control_device(self._serial, self._device_type)
+            _LOGGER.debug("Successfully triggered gate %s (%s)", self._serial, optimistic)
+        except Exception:
+            self._gate_optimistic_state = None
+            self.async_write_ha_state()
+            raise
+
+        self._gate_optimistic_task = asyncio.create_task(self._clear_gate_optimistic_after_timeout())
+
+    async def _clear_gate_optimistic_after_timeout(self) -> None:
+        """Clear optimistic state after a safety timeout."""
+        try:
+            await asyncio.sleep(GATE_OPTIMISTIC_TIMEOUT)
+            if self._gate_optimistic_state is not None:
+                _LOGGER.debug(
+                    "Gate %s optimistic state timed out without confirmation",
+                    self._serial,
+                )
+                self._gate_optimistic_state = None
+                self.async_write_ha_state()
+        except asyncio.CancelledError:
+            pass
 
     async def _activate_momentary_door(self) -> None:
         """Activate door in momentary button mode."""
@@ -368,11 +411,31 @@ class PPAContattoCover(CoordinatorEntity, CoverEntity):
 
         return attrs
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Clear optimistic gate state once real status catches up."""
+        if self._device_type == DEVICE_TYPE_GATE and self._gate_optimistic_state is not None:
+            device = self._get_device_data() or {}
+            latest = device.get("latest_status", {}) or {}
+            actual = latest.get("gate") or device.get("status", {}).get("gate")
+            target = "open" if self._gate_optimistic_state == "opening" else "closed"
+            if actual == target:
+                self._gate_optimistic_state = None
+                if self._gate_optimistic_task and not self._gate_optimistic_task.done():
+                    self._gate_optimistic_task.cancel()
+        super()._handle_coordinator_update()
+
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
         if self._momentary_task and not self._momentary_task.done():
             self._momentary_task.cancel()
             try:
                 await self._momentary_task
+            except asyncio.CancelledError:
+                pass
+        if self._gate_optimistic_task and not self._gate_optimistic_task.done():
+            self._gate_optimistic_task.cancel()
+            try:
+                await self._gate_optimistic_task
             except asyncio.CancelledError:
                 pass
