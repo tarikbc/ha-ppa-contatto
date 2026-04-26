@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -24,11 +25,16 @@ from .const import (
     DEVICE_CONTROL_ENDPOINT,
     DEVICE_REPORTS_ENDPOINT,
     DEVICES_ENDPOINT,
+    EVENT_REPLAY_LIMIT,
+    EVENT_REPLAY_RECENCY_S,
     REFRESH_TOKEN_URL,
-    WEBSOCKET_BACKOFF_RESET_TIME,
+    WEBSOCKET_AUTH_FAIL_THRESHOLD,
     WEBSOCKET_CLIENT_PING_INTERVAL,
-    WEBSOCKET_MAX_RETRIES,
-    WEBSOCKET_RECONNECT_DELAY,
+    WEBSOCKET_PONG_DEADLINE,
+    WEBSOCKET_PROACTIVE_RECYCLE,
+    WEBSOCKET_RECONNECT_BASE,
+    WEBSOCKET_RECONNECT_JITTER,
+    WEBSOCKET_RECONNECT_MAX,
     WEBSOCKET_STALE_TIMEOUT,
     WEBSOCKET_URL,
 )
@@ -64,17 +70,32 @@ class PPAContattoAPI:
         self._websocket_connected = False
         self._websocket_namespace_connected = False
         self._websocket_reconnect_count = 0
-        self._websocket_last_connect_time = 0
-        self._websocket_last_retry_reset = time.time()
-        self._device_update_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        # Number of consecutive WS handshake failures since the last successful first-frame.
+        # Used to gate a forced re-authentication; we DO NOT refresh the token on every
+        # reconnect attempt because that piles auth-endpoint load on top of WS load.
+        self._consecutive_handshake_fails = 0
+        self._websocket_last_connect_time: float = 0.0  # epoch seconds when last connect succeeded
+        self._device_update_callback: Optional[Callable[..., None]] = None
+        self._on_websocket_connected_callback: Optional[Callable[[], Any]] = None
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_listener_task: Optional[asyncio.Task] = None
         self._websocket_keepalive_task: Optional[asyncio.Task] = None
         # Monotonic timestamp of the last frame received from the server.
         # Used by the coordinator-level watchdog to detect zombie WebSockets
-        # (TCP silently dead so aiohttp never fires a close event). Reset on
-        # every successful connect and updated on every inbound frame.
+        # (TCP silently dead so aiohttp never fires a close event).
         self._websocket_last_message_at: float = 0.0
+        # Whether ANY frame has arrived since the current connect. The reconnect
+        # counter only resets to zero on first frame — that's the only honest
+        # "this connection is real" signal; bare TCP+TLS handshake isn't enough.
+        self._first_frame_received: bool = False
+        # Active ping-pong tracking. After we send "2" we record the timestamp;
+        # any inbound frame (server pong "3" or anything else) clears it. If we've
+        # been waiting for a pong for longer than WEBSOCKET_PONG_DEADLINE, the
+        # watchdog declares the socket dead even if TCP says otherwise.
+        self._waiting_pong_since: float = 0.0
+        # Last close diagnostics, for log + retry policy decisions.
+        self._last_close_code: Optional[int] = None
+        self._last_close_reason: Optional[str] = None
 
         # Load stored tokens if available
         if config_entry and hasattr(config_entry, "data"):
@@ -203,14 +224,32 @@ class PPAContattoAPI:
 
         return False
 
-    def set_device_update_callback(self, callback: Callable[[str, Dict[str, Any]], None]) -> None:
-        """Set callback function for device updates from WebSocket."""
+    def set_device_update_callback(self, callback: Callable[..., None]) -> None:
+        """Set callback function for device updates from WebSocket / event replay.
+
+        Callback signature: ``callback(serial: str, update: dict, *, source: str = 'ws',
+        report: dict | None = None)``. Older code used a 2-arg signature; we still call
+        it positionally so v1.5.x callbacks remain compatible.
+        """
         self._device_update_callback = callback
 
+    def set_on_websocket_connected_callback(self, callback: Callable[[], Any]) -> None:
+        """Register a callback invoked once each time the WS namespace finishes connecting.
+
+        Used by the coordinator to fire an immediate catch-up poll, so we replay any
+        events the cloud delivered while we were disconnected.
+        """
+        self._on_websocket_connected_callback = callback
+
     async def start_websocket(self) -> bool:
-        """Start WebSocket connection for real-time updates."""
+        """Start WebSocket connection for real-time updates.
+
+        Returns True if the TCP+TLS+WS handshake succeeded. The reconnect counter is
+        NOT reset here — only on first frame received post-connect (see listener).
+        """
         if not self.access_token:
             _LOGGER.warning("Cannot start WebSocket without access token")
+            self._consecutive_handshake_fails += 1
             return False
 
         if self._websocket_connected:
@@ -221,14 +260,10 @@ class PPAContattoAPI:
             # Build WebSocket URL (format proven to work by testing)
             params = {"auth": f"Bearer {self.access_token}", "EIO": "4", "transport": "websocket"}
 
-            # Encode parameters (use + for space encoding like successful test)
             encoded_params = []
             for key, value in params.items():
-                if key == "auth":
-                    # Use + encoding for the Bearer token (like successful test)
-                    encoded_value = value.replace(" ", "+")
-                else:
-                    encoded_value = value
+                # Use + encoding for the Bearer token (like successful test)
+                encoded_value = value.replace(" ", "+") if key == "auth" else value
                 encoded_params.append(f"{key}={encoded_value}")
 
             websocket_url = f"{WEBSOCKET_URL}?{'&'.join(encoded_params)}"
@@ -240,43 +275,81 @@ class PPAContattoAPI:
             # Connect to WebSocket
             self._websocket = await self._websocket_session.ws_connect(websocket_url)
 
-            _LOGGER.info("WebSocket connected to PPA Contatto - listening for device/status events")
+            _LOGGER.info("WebSocket TCP/TLS handshake OK — awaiting first frame to confirm liveness")
             self._websocket_connected = True
-            self._websocket_reconnect_count = 0
             self._websocket_last_connect_time = time.time()
-            self._websocket_last_retry_reset = time.time()
             self._websocket_last_message_at = time.monotonic()
+            self._first_frame_received = False
+            self._waiting_pong_since = 0.0
+            self._last_close_code = None
+            self._last_close_reason = None
 
-            # Start message listener task
+            # Start listener + keepalive
             self._websocket_listener_task = asyncio.create_task(self._websocket_message_listener())
-            # Start client-side keepalive task. Socket.IO servers ping clients
-            # on their own, but sending our own pings gives us an active probe
-            # for half-open TCP (send() errors out immediately if the socket
-            # is dead on our end) and keeps NAT entries warm.
             self._websocket_keepalive_task = asyncio.create_task(self._websocket_client_keepalive())
 
             return True
 
         except Exception as err:
-            _LOGGER.error("Failed to start WebSocket connection: %s", err)
+            self._consecutive_handshake_fails += 1
+            _LOGGER.error(
+                "Failed to start WebSocket connection (handshake fails=%d): %s",
+                self._consecutive_handshake_fails,
+                err,
+            )
             self._websocket_connected = False
             await self._cleanup_websocket()
             return False
 
     async def _websocket_message_listener(self) -> None:
-        """Listen for WebSocket messages and parse Socket.IO protocol."""
+        """Listen for WebSocket messages and parse Socket.IO protocol.
+
+        Resets the reconnect counter on FIRST frame received (the only honest "this
+        connection is real" signal). Captures close code/reason on disconnect for
+        diagnostics and retry-policy decisions.
+        """
         try:
             async for msg in self._websocket:
-                # Any frame — text, ping, pong — proves the TCP connection
-                # is alive. Stamp the watchdog timer before dispatching.
+                # Any frame proves the TCP connection is alive.
                 self._websocket_last_message_at = time.monotonic()
+                # Any frame also clears any pending pong wait.
+                self._waiting_pong_since = 0.0
+
+                # First frame post-connect = success. Reset reconnect counters.
+                if not self._first_frame_received:
+                    self._first_frame_received = True
+                    if self._websocket_reconnect_count > 0 or self._consecutive_handshake_fails > 0:
+                        _LOGGER.info(
+                            "WebSocket fully alive (first frame received after %d reconnect(s))",
+                            self._websocket_reconnect_count,
+                        )
+                    self._websocket_reconnect_count = 0
+                    self._consecutive_handshake_fails = 0
+
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     await self._handle_websocket_message(msg.data)
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    _LOGGER.error("WebSocket error: %s", self._websocket.exception())
+                    _LOGGER.error("WebSocket transport error: %s", self._websocket.exception())
                     break
-                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
-                    _LOGGER.warning("WebSocket connection closed")
+                elif msg.type == aiohttp.WSMsgType.CLOSE:
+                    # Server-initiated close frame. msg.data carries the close code,
+                    # msg.extra the reason. This is the most diagnostic disconnect path.
+                    self._last_close_code = msg.data if isinstance(msg.data, int) else None
+                    self._last_close_reason = msg.extra if isinstance(msg.extra, str) else None
+                    _LOGGER.warning(
+                        "WebSocket closed by server (code=%s, reason=%r)",
+                        self._last_close_code,
+                        self._last_close_reason,
+                    )
+                    break
+                elif msg.type in (aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+                    # Closed for non-server-frame reason (network reset, our own close, etc.)
+                    self._last_close_code = self._websocket.close_code if self._websocket is not None else None
+                    _LOGGER.warning(
+                        "WebSocket closed (type=%s, close_code=%s)",
+                        msg.type.name,
+                        self._last_close_code,
+                    )
                     break
         except Exception as err:
             _LOGGER.error("Error in WebSocket message listener: %s", err)
@@ -299,6 +372,16 @@ class PPAContattoAPI:
                 # Namespace connection confirmed
                 _LOGGER.info("Socket.IO namespace connected successfully")
                 self._websocket_namespace_connected = True
+                # Tell the coordinator a connect just completed — it will fire an
+                # immediate catch-up poll to replay any events the cloud delivered
+                # while we were disconnected.
+                if self._on_websocket_connected_callback is not None:
+                    try:
+                        result = self._on_websocket_connected_callback()
+                        if asyncio.iscoroutine(result):
+                            asyncio.create_task(result)
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.debug("on_websocket_connected callback raised: %s", err)
 
             elif message.startswith("42"):
                 # Event message with JSON data
@@ -348,32 +431,57 @@ class PPAContattoAPI:
             _LOGGER.error("Error processing device/status event: %s", err)
 
     async def _websocket_client_keepalive(self) -> None:
-        """Proactively send Socket.IO ping frames from the client side.
+        """Proactive ping + proactive recycle.
 
-        The PPA Socket.IO server sends pings on its own, but relying solely
-        on inbound traffic means a half-open TCP connection (NAT entry
-        expired on a middlebox, cloud side silently dropped us) looks fine
-        until the server next tries to push something. By sending our own
-        "2" ping frame every WEBSOCKET_CLIENT_PING_INTERVAL seconds we get:
-          1. An active liveness probe — if the TCP state is bad on our end,
-             send() raises immediately and we tear the connection down.
-          2. NAT keepalive so middleboxes don't silently drop the entry.
+        Three jobs:
+          1. Send a Socket.IO "2" ping every WEBSOCKET_CLIENT_PING_INTERVAL seconds. Acts
+             as both a NAT keepalive and an active liveness probe (send() on a dead socket
+             raises immediately).
+          2. Track whether the corresponding "3" pong arrives within WEBSOCKET_PONG_DEADLINE.
+             If not, the socket is "TCP alive but server hung" — declare dead.
+          3. Proactively recycle the connection every WEBSOCKET_PROACTIVE_RECYCLE seconds.
+             Some clouds evict long-lived connections deterministically; we'd rather take
+             the brief gap on our schedule (seconds, with immediate replay catch-up) than
+             have it land in the middle of a gate event.
         """
         try:
             while self._websocket_connected and self._websocket and not self._websocket.closed:
                 await asyncio.sleep(WEBSOCKET_CLIENT_PING_INTERVAL)
                 if not (self._websocket and not self._websocket.closed):
                     break
+
+                # Pong-deadline check. If we already had a ping in flight and no inbound
+                # frame cleared it, the listener will have updated _waiting_pong_since.
+                # If that's been more than PONG_DEADLINE, declare dead.
+                if (
+                    self._waiting_pong_since > 0
+                    and (time.monotonic() - self._waiting_pong_since) > WEBSOCKET_PONG_DEADLINE
+                ):
+                    _LOGGER.warning(
+                        "WebSocket pong not received within %.1fs — declaring socket dead",
+                        WEBSOCKET_PONG_DEADLINE,
+                    )
+                    self._websocket_connected = False
+                    break
+
+                # Proactive recycle.
+                connection_age = time.time() - self._websocket_last_connect_time
+                if connection_age > WEBSOCKET_PROACTIVE_RECYCLE:
+                    _LOGGER.info(
+                        "WebSocket reached %.0fs uptime — proactively recycling to preempt " "server-side eviction",
+                        connection_age,
+                    )
+                    self._websocket_connected = False
+                    break
+
+                # Send the ping.
                 try:
-                    # Socket.IO ping is "2"; we already reply "3" (pong) to
-                    # server pings elsewhere. Only send once the namespace
-                    # is connected so we don't interfere with the handshake.
                     if self._websocket_namespace_connected:
                         await self._websocket.send_str("2")
+                        if self._waiting_pong_since == 0:
+                            self._waiting_pong_since = time.monotonic()
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("WebSocket client ping failed (socket is likely dead): %s", err)
-                    # Mark as disconnected so the coordinator watchdog
-                    # notices on its next tick and reconnects.
                     self._websocket_connected = False
                     break
         except asyncio.CancelledError:
@@ -439,51 +547,78 @@ class PPAContattoAPI:
         except Exception as err:
             _LOGGER.error("Error stopping WebSocket: %s", err)
 
-    async def ensure_websocket_connected(self) -> bool:
-        """Ensure WebSocket connection is active, reconnect if needed.
+    def _next_reconnect_delay(self) -> float:
+        """Compute the next reconnect delay using jittered exponential backoff.
 
-        Uses a resilient reconnection strategy:
-        - First 5 attempts use standard 5-second delays
-        - After that, exponential backoff up to 5-minute delays
-        - Never completely gives up trying to reconnect
-        - Resets retry counter after 5 minutes of stable connection
+        delay = min(BASE * 2^count, MAX) * (1 ± JITTER)
+
+        Counter advance happens here so the delay reflects the *upcoming* attempt.
+        """
+        n = self._websocket_reconnect_count
+        base = min(WEBSOCKET_RECONNECT_BASE * (2**n), WEBSOCKET_RECONNECT_MAX)
+        jitter = 1.0 + (random.random() * 2 - 1) * WEBSOCKET_RECONNECT_JITTER
+        return max(0.0, base * jitter)
+
+    def _close_code_indicates_auth_problem(self) -> bool:
+        """True if the last close suggests we should re-authenticate before retrying.
+
+        Heuristics: explicit auth-related WebSocket close codes (1008 = policy violation,
+        4001/4003 = vendor-specific auth in many Socket.IO deployments) or a reason
+        string mentioning auth/token.
+        """
+        if self._last_close_code in (1008, 4001, 4002, 4003):
+            return True
+        if self._last_close_reason and re.search(
+            r"auth|token|unauthor|forbid|jwt", self._last_close_reason, re.IGNORECASE
+        ):
+            return True
+        return False
+
+    async def ensure_websocket_connected(self) -> bool:
+        """Ensure the WebSocket is connected, reconnecting with policy if needed.
+
+        Strategy (v1.6.0):
+          - Jittered exponential backoff (no flat first-N attempts).
+          - Token refresh ONLY on confirmed auth-related close OR after threshold of
+            consecutive handshake failures — *not* on every retry. Avoids piling
+            auth-endpoint load on top of WS load when the cloud is unhealthy.
+          - Reconnect counter is reset on first frame received post-connect (in the
+            listener), not here.
         """
         if self._websocket_connected and self._websocket and not self._websocket.closed:
             return True
 
-        # Reset retry counter if enough time has passed since last reset
-        current_time = time.time()
-        if current_time - self._websocket_last_retry_reset > WEBSOCKET_BACKOFF_RESET_TIME:
-            if self._websocket_reconnect_count > 0:
-                _LOGGER.info(
-                    "Resetting WebSocket retry counter after %d seconds of stability", WEBSOCKET_BACKOFF_RESET_TIME
-                )
-            self._websocket_reconnect_count = 0
-            self._websocket_last_retry_reset = current_time
-
-        # Calculate delay with exponential backoff
-        if self._websocket_reconnect_count < WEBSOCKET_MAX_RETRIES:
-            delay = WEBSOCKET_RECONNECT_DELAY
-        else:
-            # After max retries, use exponential backoff but never give up completely
-            backoff_multiplier = min(2 ** (self._websocket_reconnect_count - WEBSOCKET_MAX_RETRIES), 60)
-            delay = WEBSOCKET_RECONNECT_DELAY * backoff_multiplier
-            _LOGGER.warning(
-                "WebSocket reconnection attempt %d (using %ds backoff delay)",
-                self._websocket_reconnect_count + 1,
-                delay,
-            )
-
+        delay = self._next_reconnect_delay()
         self._websocket_reconnect_count += 1
-        _LOGGER.info("Attempting WebSocket reconnection (%d) with %ds delay", self._websocket_reconnect_count, delay)
+        _LOGGER.info(
+            "WebSocket reconnect attempt %d in %.1fs (last close code=%s reason=%r)",
+            self._websocket_reconnect_count,
+            delay,
+            self._last_close_code,
+            self._last_close_reason,
+        )
 
-        # Try to refresh token first
-        if not self.access_token or not await self._refresh_access_token():
-            _LOGGER.error("Cannot reconnect WebSocket without valid access token")
-            return False
-
-        # Wait before reconnecting
         await asyncio.sleep(delay)
+
+        # Refresh policy: only if no token at all, or last close was auth-related, or
+        # we've failed handshakes too many times in a row.
+        need_refresh = (
+            not self.access_token
+            or self._close_code_indicates_auth_problem()
+            or self._consecutive_handshake_fails >= WEBSOCKET_AUTH_FAIL_THRESHOLD
+        )
+        if need_refresh:
+            _LOGGER.info(
+                "Refreshing token before WS reconnect (no_token=%s auth_close=%s handshake_fails=%d)",
+                not self.access_token,
+                self._close_code_indicates_auth_problem(),
+                self._consecutive_handshake_fails,
+            )
+            if not await self._refresh_access_token():
+                _LOGGER.error("Cannot reconnect WebSocket — token refresh failed")
+                return False
+            # Reset the handshake-fail counter so we don't refresh on every attempt.
+            self._consecutive_handshake_fails = 0
 
         return await self.start_websocket()
 
@@ -631,51 +766,128 @@ class PPAContattoAPI:
             _LOGGER.error("Failed to get reports for device %s: %s", serial, err)
             raise
 
-    async def get_latest_device_status(self, serial: str) -> Dict[str, Any]:
-        """Get the latest status from device reports."""
-        try:
-            reports = await self.get_device_reports(serial, page=0, total=5)
+    @staticmethod
+    def _parse_report_target(target: str) -> Optional[tuple]:
+        """Parse a report's ``target`` field into (kind, value) or None if not a state event."""
+        if not target or ": " not in target:
+            return None
+        kind, _, value = target.partition(": ")
+        kind, value = kind.strip(), value.strip()
+        if kind not in ("gate", "relay"):
+            return None
+        return kind, value
 
-            # Parse latest status from reports
-            latest_status = {
-                "gate": None,
-                "relay": None,
-                "last_action": None,
-                "last_user": None,
+    async def fetch_device_events_since(
+        self,
+        serial: str,
+        last_event_id: int,
+        *,
+        limit: int = EVENT_REPLAY_LIMIT,
+        recency_seconds: int = EVENT_REPLAY_RECENCY_S,
+    ) -> Dict[str, Any]:
+        """Pull recent reports and return new state-change events plus latest status.
+
+        The PPA cloud's ``/device/{serial}/reports`` endpoint is the canonical event log.
+        We pull the most recent N reports (newest first), filter to those with id strictly
+        greater than ``last_event_id`` AND within ``recency_seconds`` of now, and return
+        them sorted **chronologically** so the caller can replay them through the state
+        handler in order.
+
+        Returns:
+            {
+              "events": [ {"id", "kind", "value", "created_at", "user"} ],   # chronological
+              "latest_status": {"gate", "relay", "last_action", "last_user"},
+              "newest_id": int,    # max(report.id) seen, or unchanged last_event_id
             }
+        """
+        empty: Dict[str, Any] = {
+            "events": [],
+            "latest_status": {"gate": None, "relay": None, "last_action": None, "last_user": None},
+            "newest_id": last_event_id,
+        }
 
-            for report in reports:
-                target = report.get("target", "")
-                created_at = report.get("createdAt")
-                user_name = report.get("name")
-
-                if "gate:" in target:
-                    if latest_status["gate"] is None:
-                        latest_status["gate"] = target.split("gate: ")[1]
-                        if latest_status["last_action"] is None:
-                            latest_status["last_action"] = created_at
-                            latest_status["last_user"] = user_name
-
-                elif "relay:" in target:
-                    if latest_status["relay"] is None:
-                        latest_status["relay"] = target.split("relay: ")[1]
-                        if latest_status["last_action"] is None:
-                            latest_status["last_action"] = created_at
-                            latest_status["last_user"] = user_name
-
-                # Stop if we have both statuses
-                if latest_status["gate"] is not None and latest_status["relay"] is not None:
-                    break
-
-            return latest_status
-
+        try:
+            reports = await self.get_device_reports(serial, page=0, total=limit)
         except Exception as err:
-            _LOGGER.debug(
-                "Failed to get latest status for %s, falling back to basic status: %s",
-                serial,
-                err,
+            _LOGGER.debug("Failed to fetch reports for %s: %s", serial, err)
+            return empty
+
+        if not reports:
+            return empty
+
+        now = time.time()
+        recency_cutoff_iso = None  # filter out events older than recency_seconds
+        if recency_seconds > 0:
+            recency_cutoff_iso = now - recency_seconds
+
+        # Latest-status derivation walks newest-first (the API's natural order).
+        latest_status = {"gate": None, "relay": None, "last_action": None, "last_user": None}
+
+        # Replayable events: filter to "newer than last_event_id" + recency.
+        # Reports are returned newest-first; reverse to chronological order so callers
+        # apply state changes in the order they happened.
+        newest_id = last_event_id
+        replayable: List[Dict[str, Any]] = []
+        for r in reports:
+            rid = r.get("id")
+            if not isinstance(rid, int):
+                continue
+            parsed = self._parse_report_target(r.get("target", ""))
+            if parsed is None:
+                continue
+            kind, value = parsed
+            created_at = r.get("createdAt")
+            user_name = r.get("name")
+
+            # latest_status: take the FIRST (newest) of each kind we see.
+            if latest_status[kind] is None:
+                latest_status[kind] = value
+                if latest_status["last_action"] is None:
+                    latest_status["last_action"] = created_at
+                    latest_status["last_user"] = user_name
+
+            # Replay filter.
+            if rid <= last_event_id:
+                continue
+
+            if recency_cutoff_iso is not None and created_at:
+                try:
+                    # ISO 8601 with 'Z' suffix; Python's fromisoformat doesn't accept Z
+                    # before 3.11, so be defensive.
+                    iso = created_at.replace("Z", "+00:00") if isinstance(created_at, str) else None
+                    from datetime import datetime
+
+                    if iso:
+                        ts = datetime.fromisoformat(iso).timestamp()
+                        if ts < recency_cutoff_iso:
+                            continue
+                except Exception:  # noqa: BLE001
+                    # If we can't parse, err on the side of replaying.
+                    pass
+
+            replayable.append(
+                {
+                    "id": rid,
+                    "kind": kind,
+                    "value": value,
+                    "created_at": created_at,
+                    "user": user_name,
+                }
             )
-            return {"gate": None, "relay": None, "last_action": None, "last_user": None}
+            if rid > newest_id:
+                newest_id = rid
+
+        replayable.reverse()  # chronological
+
+        return {"events": replayable, "latest_status": latest_status, "newest_id": newest_id}
+
+    async def get_latest_device_status(self, serial: str) -> Dict[str, Any]:
+        """Backward-compat alias — returns just the latest_status portion of fetch_device_events_since.
+
+        Kept for any external callers that may still depend on the old name.
+        """
+        result = await self.fetch_device_events_since(serial, last_event_id=0)
+        return result["latest_status"]
 
     async def get_device_configuration(self, serial: str) -> Dict[str, Any]:
         """Get device configuration."""
